@@ -1,0 +1,3 @@
+# Main offline logfile analyzer uses only the Python standard library.
+# Optional live SocketCAN monitoring:
+python-can>=4.3,<5

@@ -1,0 +1,57 @@
+line_number,timestamp,relative_seconds,interface,can_id,data_hex,category,name,value,unit,datatype,endian,scale,offset,confidence,status,notes
+574,1786979657.430805,32.402518,can1,02420B90,01,panel,ac_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+574,1786979657.430805,32.402518,can1,02420B90,01,panel,ac_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+620,1786979659.850477,34.82219,can1,02420B90,01,panel,ac_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+620,1786979659.850477,34.82219,can1,02420B90,01,panel,ac_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+646,1786979661.393102,36.364815,can1,02420B90,01,panel,ac_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+646,1786979661.393102,36.364815,can1,02420B90,01,panel,ac_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+662,1786979662.351578,37.323291,can1,02420B90,01,panel,ac_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+662,1786979662.351578,37.323291,can1,02420B90,01,panel,ac_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+682,1786979663.510176,38.481889,can1,02420B90,01,panel,ac_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+682,1786979663.510176,38.481889,can1,02420B90,01,panel,ac_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+689,1786979663.961204,38.932917,can1,02420B90,02,panel,ac_panel_requested_source,SHORE,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+689,1786979663.961204,38.932917,can1,02420B90,02,panel,ac_panel_requested_source_raw,2,raw,uint8,,1,0,high,confirmed,
+697,1786979664.350092,39.321805,can1,02420B90,02,panel,ac_panel_requested_source,SHORE,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+697,1786979664.350092,39.321805,can1,02420B90,02,panel,ac_panel_requested_source_raw,2,raw,uint8,,1,0,high,confirmed,
+731,1786979666.456746,41.428459,can1,02420B88,01,panel,house_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+731,1786979666.456746,41.428459,can1,02420B88,01,panel,house_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+762,1786979668.045898,43.017611,can1,02420B88,01,panel,house_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+762,1786979668.045898,43.017611,can1,02420B88,01,panel,house_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+787,1786979669.266771,44.238484,can1,02420B88,01,panel,house_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+787,1786979669.266771,44.238484,can1,02420B88,01,panel,house_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+885,1786979674.686835,49.658548,can1,02460B88,01,generator,generator_command,START,enum,uint8 enum,,1,0,high,confirmed,"0x01=START and 0x02=STOP confirmed by the operator. Semantic mapping is confirmed; replay safety, acknowledgements, timing, and interlocks remain unvalidated."
+885,1786979674.686835,49.658548,can1,02460B88,01,generator,generator_command_raw,1,raw,uint8,,1,0,high,confirmed,Direct generator command byte on CAN ID 0x02460B88.
+1169,1786979686.257445,61.229158,can1,02140898,02,generator,generator_or_ac_transition_marker,AC_RAMP_DOWN_MARKER,enum candidate,uint8 enum,,1,0,medium,candidate,0x02 precedes clean voltage ramp-down; 0x03 precedes clean ramp-up. These are transition markers distinct from the confirmed direct commands on 0x02460B88.
+1276,1786979691.104477,66.07619,can1,02420B90,01,panel,ac_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+1276,1786979691.104477,66.07619,can1,02420B90,01,panel,ac_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+1311,1786979692.619103,67.590816,can1,02400B90,01,panel,ac_panel_applied_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+1311,1786979692.619103,67.590816,can1,02400B90,01,panel,ac_panel_applied_source_raw,1,raw,uint8,,1,0,high,confirmed,
+2028,1786979731.149753,106.121466,can1,02420B90,02,panel,ac_panel_requested_source,SHORE,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2028,1786979731.149753,106.121466,can1,02420B90,02,panel,ac_panel_requested_source_raw,2,raw,uint8,,1,0,high,confirmed,
+2055,1786979732.516073,107.487786,can1,02400B90,02,panel,ac_panel_applied_source,SHORE,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2055,1786979732.516073,107.487786,can1,02400B90,02,panel,ac_panel_applied_source_raw,2,raw,uint8,,1,0,high,confirmed,
+2318,1786979746.245002,121.216715,can1,02420B90,04,panel,ac_panel_requested_source,GENERATOR,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2318,1786979746.245002,121.216715,can1,02420B90,04,panel,ac_panel_requested_source_raw,4,raw,uint8,,1,0,high,confirmed,
+2353,1786979747.800892,122.772605,can1,02400B90,01,panel,ac_panel_applied_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2353,1786979747.800892,122.772605,can1,02400B90,01,panel,ac_panel_applied_source_raw,1,raw,uint8,,1,0,high,confirmed,
+2365,1786979748.403653,123.375366,can1,02400B90,04,panel,ac_panel_applied_source,GENERATOR,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2365,1786979748.403653,123.375366,can1,02400B90,04,panel,ac_panel_applied_source_raw,4,raw,uint8,,1,0,high,confirmed,
+2702,1786979767.975162,142.946875,can1,02420B88,01,panel,house_panel_requested_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2702,1786979767.975162,142.946875,can1,02420B88,01,panel,house_panel_requested_source_raw,1,raw,uint8,,1,0,high,confirmed,
+2731,1786979769.515791,144.487504,can1,02400B88,01,panel,house_panel_applied_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2731,1786979769.515791,144.487504,can1,02400B88,01,panel,house_panel_applied_source_raw,1,raw,uint8,,1,0,high,confirmed,
+2965,1786979780.551106,155.522819,can1,02420B88,02,panel,house_panel_requested_source,SHORE,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2965,1786979780.551106,155.522819,can1,02420B88,02,panel,house_panel_requested_source_raw,2,raw,uint8,,1,0,high,confirmed,
+2988,1786979781.829888,156.801601,can1,02140898,03,generator,generator_or_ac_transition_marker,AC_RAMP_UP_MARKER,enum candidate,uint8 enum,,1,0,medium,candidate,0x02 precedes clean voltage ramp-down; 0x03 precedes clean ramp-up. These are transition markers distinct from the confirmed direct commands on 0x02460B88.
+2992,1786979781.905072,156.876785,can1,02400B88,02,panel,house_panel_applied_source,SHORE,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+2992,1786979781.905072,156.876785,can1,02400B88,02,panel,house_panel_applied_source_raw,2,raw,uint8,,1,0,high,confirmed,
+3147,1786979789.017357,163.98907,can1,02420B88,04,panel,house_panel_requested_source,GENERATOR,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+3147,1786979789.017357,163.98907,can1,02420B88,04,panel,house_panel_requested_source_raw,4,raw,uint8,,1,0,high,confirmed,
+3181,1786979790.57695,165.548663,can1,02400B88,01,panel,house_panel_applied_source,OFF,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+3181,1786979790.57695,165.548663,can1,02400B88,01,panel,house_panel_applied_source_raw,1,raw,uint8,,1,0,high,confirmed,
+3195,1786979791.149008,166.120721,can1,02400B88,04,panel,house_panel_applied_source,GENERATOR,enum,uint8 enum,,1,0,high,confirmed,Enum established by the operator's ordered OFF/shore/generator actions.
+3195,1786979791.149008,166.120721,can1,02400B88,04,panel,house_panel_applied_source_raw,4,raw,uint8,,1,0,high,confirmed,
+3318,1786979796.550823,171.522536,can1,02140898,02,generator,generator_or_ac_transition_marker,AC_RAMP_DOWN_MARKER,enum candidate,uint8 enum,,1,0,medium,candidate,0x02 precedes clean voltage ramp-down; 0x03 precedes clean ramp-up. These are transition markers distinct from the confirmed direct commands on 0x02460B88.
+3427,1786979802.406602,177.378315,can1,02460B88,02,generator,generator_command,STOP,enum,uint8 enum,,1,0,high,confirmed,"0x01=START and 0x02=STOP confirmed by the operator. Semantic mapping is confirmed; replay safety, acknowledgements, timing, and interlocks remain unvalidated."
+3427,1786979802.406602,177.378315,can1,02460B88,02,generator,generator_command_raw,2,raw,uint8,,1,0,high,confirmed,Direct generator command byte on CAN ID 0x02460B88.
+3680,1786979814.628766,189.600479,can1,02140898,03,generator,generator_or_ac_transition_marker,AC_RAMP_UP_MARKER,enum candidate,uint8 enum,,1,0,medium,candidate,0x02 precedes clean voltage ramp-down; 0x03 precedes clean ramp-up. These are transition markers distinct from the confirmed direct commands on 0x02460B88.

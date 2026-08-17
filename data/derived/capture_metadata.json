@@ -1,0 +1,17 @@
+{
+  "source_file": "d5175281-0a41-493a-ae0d-fb84baba6d2f.log",
+  "sha256": "47296d01c77acc01bc32621e8b0bbdb7c6f7e4837da1c207342baba30a281641",
+  "size_bytes": 207809,
+  "frame_count": 4401,
+  "unique_can_ids": 45,
+  "interfaces": [
+    "can1"
+  ],
+  "start_epoch": 1786979625.028287,
+  "end_epoch": 1786979853.990442,
+  "start_utc": "2026-08-17T15:13:45.028287+00:00",
+  "end_utc": "2026-08-17T15:17:33.990442+00:00",
+  "duration_seconds": 228.962155,
+  "parse_errors": 0,
+  "can_id_format": "29-bit extended IDs inferred from 8-hex-digit identifiers"
+}
