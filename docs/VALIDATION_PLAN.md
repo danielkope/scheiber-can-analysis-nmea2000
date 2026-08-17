@@ -11,13 +11,14 @@ Convert the current mapping from engineering hypotheses into calibration-grade d
 - Keep a timestamped experiment notebook.
 - Use calibrated meters for voltage, current, temperature, and frequency.
 - Do not transmit proprietary frames until receive-only mappings are independently confirmed.
+- Treat generator and source-switching work as safety-critical electrical testing.
 
 ## A. Tank calibration
 
 1. Record stable baseline percentages and physical dip/gauge readings.
 2. Add or remove a known volume.
 3. Capture at least five minutes before and after.
-4. Fit percentage against litres and check for hysteresis, damping, and clipping.
+4. Fit percentage against litres and check hysteresis, damping, and clipping.
 5. Repeat at low, mid, and high tank levels.
 
 Expected result: confirm `0x02040580` as linear percent and determine whether the fourth word is quality, sequence, or alarm state.
@@ -76,9 +77,9 @@ Measure and correlate:
 
 Change one charger configuration setting at a time to decode the sparse `0x005410xx` messages.
 
-## E. Panel and generator sequence
+## E. Panel and generator lifecycle validation
 
-Repeat the known sequence with exact event markers:
+Repeat the known panel sequence with exact event markers:
 
 1. Generator ON.
 2. AC panel: Generator -> OFF.
@@ -89,7 +90,58 @@ Repeat the known sequence with exact event markers:
 7. House panel: Shore -> Generator.
 8. Generator OFF.
 
-Record both the button action and visible applied state. Direct command semantics are confirmed as `0x02460B88#01=START` and `0x02460B88#02=STOP`. The separate `0x02140898` frames remain AC ramp-direction markers. Before any transmit implementation, validate required companion frames, message ordering, repetition rate, acknowledgements, timeout behavior, interlocks, abort behavior, and fail-safe STOP on an isolated test setup.
+For at least three independent generator cycles, record these physical timestamps:
+
+- START button/command issued;
+- starter/crank begins;
+- engine fires;
+- AC frequency first becomes nonzero;
+- AC reaches 50 Hz;
+- display/controller reports stable running;
+- STOP button/command issued;
+- AC begins decaying;
+- AC reaches 0 Hz;
+- engine audibly stops;
+- final idle indication appears.
+
+Expected receive-side sequence:
+
+```text
+02460B88#01 -> STARTING
+02440B88#02/#03 -> STARTING confirmed
+005A1020=50.0 Hz -> RUNNING
+02440B88#01 -> RUNNING_SETTLED
+
+02460B88#02 -> STOPPING
+02440B88#05/#04 -> STOPPING confirmed
+005A1020=0.0 Hz -> STOPPED
+02440B88#00 -> OFF_IDLE
+```
+
+### Required checks
+
+1. Confirm whether `#02` always precedes `#03`, and whether either value repeats.
+2. Confirm whether `#05` always precedes `#04`, and whether either value repeats.
+3. Determine the delay distributions from command to status, status to 50/0 Hz, and frequency milestone to terminal status.
+4. Capture the final `02440B88#00` at least twice.
+5. Correlate `0x02160B88`, `0x02140B88`, and all adjacent companion frames with each transition.
+6. Repeat source-panel switching while the generator state is fixed to verify that context gating prevents false state transitions.
+7. Verify that 50 Hz outside START and 0 Hz outside STOP are logged as AC-path observations rather than generator engine-state changes.
+
+### Transmission prerequisites
+
+Before any transmit implementation, validate on an isolated test setup:
+
+- required companion frames and ordering;
+- repetition rate and command duration;
+- positive and negative acknowledgements;
+- command timeout and watchdog behavior;
+- crank limits and retry policy;
+- low-voltage, oil-pressure, temperature, fire, exhaust, shore-power, and transfer-switch interlocks;
+- abort behavior during STARTING and STOPPING;
+- fail-safe STOP behavior after CAN loss, gateway crash, or power interruption.
+
+The present repository intentionally implements no command transmitter.
 
 ## F. Acceptance criteria
 
@@ -100,3 +152,10 @@ A field becomes `confirmed` only after:
 - stable endianness and datatype interpretation;
 - no contradictory values elsewhere in the capture;
 - a documented unavailable/error encoding.
+
+A lifecycle transition additionally requires:
+
+- the correct transaction context;
+- ordered physical correlation;
+- no false transition during source-panel-only operations;
+- documented handling of late or repeated status frames.

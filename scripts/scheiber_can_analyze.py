@@ -23,8 +23,14 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+from generator_state_machine import (  # noqa: E402
+    GeneratorLifecycleEvent,
+    GeneratorLifecycleTracker,
+    track_generator_lifecycle,
+)
 from scheiber_can_core import (  # noqa: E402
     GENERATOR_COMMAND_ENUM,
+    GENERATOR_STATUS_ENUM,
     HOUSE_BATTERY_IDS,
     SELECTOR_ENUM,
     CandumpFrame,
@@ -34,6 +40,7 @@ from scheiber_can_core import (  # noqa: E402
     u16le,
 )
 from scheiber_decoders import decode_frame  # noqa: E402
+
 
 def write_csv(path: Path, rows: Iterable[Mapping[str, Any]], fieldnames: Sequence[str] | None = None) -> None:
     rows_list = list(rows)
@@ -70,7 +77,12 @@ def capture_metadata(path: Path, frames: Sequence[CandumpFrame]) -> dict[str, An
     }
 
 
-def summarize(frames: Sequence[CandumpFrame], decoded: Sequence[DecodedRecord], metadata: Mapping[str, Any]) -> str:
+def summarize(
+    frames: Sequence[CandumpFrame],
+    decoded: Sequence[DecodedRecord],
+    lifecycle: Sequence[GeneratorLifecycleEvent],
+    metadata: Mapping[str, Any],
+) -> str:
     by_id: dict[str, list[CandumpFrame]] = defaultdict(list)
     for frame in frames:
         by_id[frame.can_id_hex].append(frame)
@@ -96,11 +108,31 @@ def summarize(frames: Sequence[CandumpFrame], decoded: Sequence[DecodedRecord], 
         lines.append(f"- {key}: {tank_latest.get(key, 'n/a')} %")
     lines.extend([
         "",
-        "## Confirmed generator command mapping",
+        "## Confirmed generator lifecycle mapping",
         "",
-        "- `0x02460B88#01` = START",
-        "- `0x02460B88#02` = STOP",
-        "- Semantic decoding is confirmed; transmission/replay remains disabled pending safety validation.",
+        "- `0x02460B88#01` = external START command -> `STARTING`",
+        "- `0x02440B88#02/#03` = `STARTING` status confirmation",
+        "- `0x005A1020` first little-endian word `500` = 50.0 Hz -> `RUNNING` within an active START transaction",
+        "- `0x02440B88#01` = `RUNNING_SETTLED`",
+        "- `0x02460B88#02` = external STOP command -> `STOPPING`",
+        "- `0x02440B88#05/#04` = `STOPPING` status confirmation",
+        "- `0x005A1020` first little-endian word `0` = 0.0 Hz -> `STOPPED` within an active STOP transaction",
+        "- `0x02440B88#00` = `OFF_IDLE` (confirmed in follow-on work; not observed in this baseline capture)",
+        "",
+        "The frequency frame is context-gated because 0x005A1020 also changes during AC source switching. It is not used as a global engine-state signal outside an active START/STOP transaction.",
+        "",
+        "### Lifecycle events reconstructed from this capture",
+        "",
+        "| t (s) | Frame | Signal | State before | State after | Accepted |",
+        "|---:|---|---|---|---|---|",
+    ])
+    for event in lifecycle:
+        accepted = "yes" if event.accepted else "no/context-only"
+        lines.append(
+            f"| {event.relative_seconds:.6f} | `0x{event.can_id}#{event.data_hex}` | {event.signal} | "
+            f"{event.state_before} | {event.state_after} | {accepted} |"
+        )
+    lines.extend([
         "",
         "## Most frequent IDs",
         "",
@@ -135,6 +167,7 @@ def run(log_path: Path, output_dir: Path, config_path: Path | None = None) -> di
     decoded: list[DecodedRecord] = []
     for frame in frames:
         decoded.extend(decode_frame(frame, start_ts, capacities))
+    lifecycle = track_generator_lifecycle(frames, start_ts)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata = capture_metadata(log_path, frames)
@@ -159,14 +192,22 @@ def run(log_path: Path, output_dir: Path, config_path: Path | None = None) -> di
     write_csv(output_dir / "can_id_inventory.csv", inventory_rows)
 
     decoded_rows = [asdict(row) for row in decoded]
+    lifecycle_rows = [event.as_dict() for event in lifecycle]
     write_csv(output_dir / "decoded_fields_long.csv", decoded_rows)
     write_csv(output_dir / "tank_samples.csv", [r for r in decoded_rows if r["category"] == "tank"])
     write_csv(output_dir / "house_battery_candidates.csv", [r for r in decoded_rows if r["category"] == "house_battery"])
     write_csv(output_dir / "charger_candidates.csv", [r for r in decoded_rows if r["category"] == "charger"])
     write_csv(output_dir / "event_candidates.csv", [r for r in decoded_rows if r["category"] in {"panel", "generator"}])
+    write_csv(output_dir / "generator_state_timeline.csv", lifecycle_rows)
 
-    (output_dir / "summary.md").write_text(summarize(frames, decoded, metadata), encoding="utf-8")
-    return {"metadata": metadata, "decoded_count": len(decoded), "output_dir": str(output_dir)}
+    (output_dir / "summary.md").write_text(summarize(frames, decoded, lifecycle, metadata), encoding="utf-8")
+    return {
+        "metadata": metadata,
+        "decoded_count": len(decoded),
+        "generator_lifecycle_event_count": len(lifecycle),
+        "generator_final_state": lifecycle[-1].state_after if lifecycle else "UNKNOWN",
+        "output_dir": str(output_dir),
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:

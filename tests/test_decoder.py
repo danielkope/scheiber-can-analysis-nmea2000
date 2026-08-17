@@ -14,8 +14,8 @@ CAP = {"water_l": 600.0, "diesel_1_l": 500.0, "diesel_2_l": 500.0}
 
 
 class DecoderTests(unittest.TestCase):
-    def frame(self, cid: int, payload: str):
-        return mod.CandumpFrame(1, 1000.0, "can1", cid, bytes.fromhex(payload))
+    def frame(self, cid: int, payload: str, *, line: int = 1, timestamp: float = 1000.0):
+        return mod.CandumpFrame(line, timestamp, "can1", cid, bytes.fromhex(payload))
 
     def values(self, cid: int, payload: str):
         return {r.name: r.value for r in mod.decode_frame(self.frame(cid, payload), 1000.0, CAP)}
@@ -36,6 +36,73 @@ class DecoderTests(unittest.TestCase):
     def test_generator_command(self):
         self.assertEqual(self.values(0x02460B88, "01")["generator_command"], "START")
         self.assertEqual(self.values(0x02460B88, "02")["generator_command"], "STOP")
+
+    def test_generator_status_enum(self):
+        expected = {
+            "00": "OFF_IDLE",
+            "01": "RUNNING_SETTLED",
+            "02": "STARTING",
+            "03": "STARTING",
+            "04": "STOPPING",
+            "05": "STOPPING",
+        }
+        for payload, state in expected.items():
+            with self.subTest(payload=payload):
+                self.assertEqual(self.values(0x02440B88, payload)["generator_status"], state)
+
+    def test_generator_frequency_signal(self):
+        running = self.values(0x005A1020, "F401FFFFFFFFFFFF")
+        stopped = self.values(0x005A1020, "0000FFFFFFFFFFFF")
+        self.assertEqual(running["charger_candidate_1020_ac_frequency"], 50.0)
+        self.assertEqual(running["generator_lifecycle_ac_signal"], "AC_PRESENT_50_HZ")
+        self.assertEqual(stopped["generator_lifecycle_ac_signal"], "AC_ABSENT_0_HZ")
+
+    def test_generator_lifecycle_sequence(self):
+        frames = [
+            self.frame(0x02460B88, "01", line=1, timestamp=1000.0),
+            self.frame(0x02440B88, "02", line=2, timestamp=1000.1),
+            self.frame(0x02440B88, "03", line=3, timestamp=1000.2),
+            self.frame(0x005A1020, "F401FFFFFFFFFFFF", line=4, timestamp=1001.0),
+            self.frame(0x02440B88, "01", line=5, timestamp=1001.5),
+            self.frame(0x02460B88, "02", line=6, timestamp=1002.0),
+            self.frame(0x02440B88, "05", line=7, timestamp=1002.1),
+            self.frame(0x02440B88, "04", line=8, timestamp=1002.2),
+            self.frame(0x005A1020, "0000FFFFFFFFFFFF", line=9, timestamp=1003.0),
+            self.frame(0x02440B88, "00", line=10, timestamp=1003.5),
+        ]
+        events = mod.track_generator_lifecycle(frames, 1000.0)
+        self.assertEqual(
+            [event.state_after for event in events],
+            [
+                "STARTING",
+                "STARTING",
+                "STARTING",
+                "RUNNING",
+                "RUNNING_SETTLED",
+                "STOPPING",
+                "STOPPING",
+                "STOPPING",
+                "STOPPED",
+                "OFF_IDLE",
+            ],
+        )
+        self.assertTrue(all(event.accepted for event in events))
+
+    def test_frequency_is_context_gated(self):
+        tracker = mod.GeneratorLifecycleTracker()
+        event = tracker.process(self.frame(0x005A1020, "0000FFFFFFFFFFFF"), 1000.0)[0]
+        self.assertFalse(event.accepted)
+        self.assertEqual(event.state_after, "UNKNOWN")
+        self.assertEqual(event.signal, "AC_ABSENT_OUTSIDE_STOP_TRANSACTION")
+
+    def test_starting_status_does_not_regress_running(self):
+        tracker = mod.GeneratorLifecycleTracker()
+        tracker.process(self.frame(0x02460B88, "01", timestamp=1000.0), 1000.0)
+        tracker.process(self.frame(0x005A1020, "F401FFFFFFFFFFFF", timestamp=1001.0), 1000.0)
+        event = tracker.process(self.frame(0x02440B88, "03", timestamp=1001.1), 1000.0)[0]
+        self.assertEqual(event.state_before, "RUNNING")
+        self.assertEqual(event.state_after, "RUNNING")
+        self.assertEqual(event.signal, "STARTING_STATUS_LINGER")
 
     def test_ac(self):
         values = self.values(0x02040898, "00E60032")

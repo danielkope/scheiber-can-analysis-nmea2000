@@ -1,18 +1,18 @@
 # 12.6 Mapping register — Unresolved
 
-| **CAN ID**                           | **Bytes** | **Signal**                            | **Type / endian**          | **Scale / unit**           | **Confidence** | **Interpretation**                                                    |
-|--------------------------------------|-----------|---------------------------------------|----------------------------|----------------------------|----------------|-----------------------------------------------------------------------|
-| 0x02040580                           | 6-7       | Tank frame state / quality / sequence | uint16 / big               | unknown raw                | low            | Unknown metadata field                                                |
-| 0x02060580                           | 0-1       | Central sensor value A                | uint16 / big               | unknown raw                | low            | Current, load, temperature, or sensor value candidate                 |
-| 0x02060580                           | 2-3       | Central sensor flags/counter          | uint16 / big               | unknown raw                | low            | Small state/counter field                                             |
-| 0x00561008                           | 6-7       | Charger 1008 config/status bytes      | 2 x uint8 / n/a            | unknown raw                | low            | Unresolved configuration/status                                       |
-| 0x00561010                           | 6-7       | Charger 1010 config/status bytes      | 2 x uint8 / n/a            | unknown raw                | low            | Unresolved configuration/status                                       |
-| 0x00561020                           | 6-7       | Charger 1020 config/status bytes      | 2 x uint8 / n/a            | unknown raw                | low            | Unresolved configuration/status                                       |
-| 0x00521008 / 0x00521010              | 2-3       | Charger temperature/counter candidate | uint16 / little            | unknown raw or K candidate | low            | Monotonic active-state field; temperature is plausible but not proven |
-| 0x00541008 / 0x00541010 / 0x00541020 | 0-7       | Charger sparse configuration/status   | byte array / mixed/unknown | unknown raw                | low            | Configuration/status message                                          |
-| 0x02140B88                           | all       | House-panel mode/state                | byte array / unknown       | unknown raw                | low            | Preserved but not decoded                                             |
-| 0x02140B90                           | all       | AC-panel mode/state                   | byte array / unknown       | unknown raw                | low            | Preserved but not decoded                                             |
-| 0x02160B88                           | all       | House-panel bitfield/state            | byte array / unknown       | unknown raw                | low            | Preserved but not decoded                                             |
-| 0x02440B88                           | all       | House-panel transition/config         | byte array / unknown       | unknown raw                | low            | Preserved but not decoded                                             |
-| 0x00080000                           | all       | Global/time/status frame              | byte array / unknown       | unknown raw                | low            | Preserved but not decoded                                             |
+| **CAN ID** | **Bytes** | **Signal** | **Type / endian** | **Scale / unit** | **Confidence** | **Interpretation** |
+|---|---|---|---|---|---|---|
+| `0x02040580` | 6-7 | Tank frame state / quality / sequence | `uint16` / big | unknown raw | low | Unknown metadata field |
+| `0x02060580` | 0-1 | Central sensor value A | `uint16` / big | unknown raw | low | Current, load, temperature, or sensor value candidate |
+| `0x02060580` | 2-3 | Central sensor flags/counter | `uint16` / big | unknown raw | low | Small state/counter field |
+| `0x00561008` | 6-7 | Charger 1008 config/status bytes | 2 x `uint8` | unknown raw | low | Unresolved configuration/status |
+| `0x00561010` | 6-7 | Charger 1010 config/status bytes | 2 x `uint8` | unknown raw | low | Unresolved configuration/status |
+| `0x00561020` | 6-7 | Charger 1020 config/status bytes | 2 x `uint8` | unknown raw | low | Unresolved configuration/status |
+| `0x00521008 / 0x00521010` | 2-3 | Charger temperature/counter candidate | `uint16` / little | unknown raw or K candidate | low | Monotonic active-state field; temperature plausible but unproven |
+| `0x00541008 / 0x00541010 / 0x00541020` | 0-7 | Charger sparse configuration/status | byte array / mixed | unknown raw | low | Configuration/status message |
+| `0x02140B88` | all | House-panel / generator companion mode-state | byte array / unknown | unknown raw | low | Values correlate with transitions, but exact role is unresolved |
+| `0x02140B90` | all | AC-panel mode/state | byte array / unknown | unknown raw | low | Preserved but not decoded |
+| `0x02160B88` | all | House-panel / generator companion bitfield | byte array / unknown | unknown raw | low | Changes immediately beside START/STOP; acknowledgement/interlock semantics unresolved |
+| `0x00080000` | all | Global/time/status frame | byte array / unknown | unknown raw | low | Preserved but not decoded |
 
+`0x02440B88` is no longer listed as unresolved: its receive-side lifecycle enum is confirmed. The exact substage distinction between `0x02` and `0x03`, and between `0x05` and `0x04`, remains unresolved and should be tested with repeated timestamped starts/stops.

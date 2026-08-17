@@ -12,7 +12,7 @@ This engineering report is split into review-friendly Markdown sections. The bui
 - [5. Analysis method](report/05_5_analysis_method.md)
 - [6. Confirmed tank mapping](report/06_6_confirmed_tank_mapping.md)
 - [7. AC and House panel source switching](report/07_7_ac_and_house_panel_source_switching.md)
-- [8. AC/generator telemetry](report/08_8_ac_generator_telemetry.md)
+- [8. AC/generator telemetry and lifecycle state machine](report/08_8_ac_generator_telemetry.md)
 - [9. Six house-battery candidates](report/09_9_six_house_battery_candidates.md)
 - [10. Three charger families](report/10_10_three_charger_families.md)
 - [11. Nine-battery assignment status](report/11_11_nine_battery_assignment_status.md)
@@ -29,8 +29,12 @@ This engineering report is split into review-friendly Markdown sections. The bui
 - [Appendix B. Selected raw evidence examples](report/22_appendix_b_selected_raw_evidence_examples.md)
 - [Appendix C. References and external technical sources](report/23_appendix_c_references_and_external_technical_sources.md)
 
+A focused, implementation-oriented version of the generator state machine is also available at [`GENERATOR_LIFECYCLE.md`](GENERATOR_LIFECYCLE.md).
+
 ## Build the complete report
 
 ```bash
 ./scripts/build_report.sh
 ```
+
+The build regenerates analysis outputs and figures from the hash-identified raw capture before producing the PDF and DOCX.
