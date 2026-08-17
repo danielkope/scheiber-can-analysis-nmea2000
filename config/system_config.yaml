@@ -1,0 +1,35 @@
+project:
+  name: Scheiber CAN Analysis for NMEA 2000
+  report_version: "1.0"
+  capture_interface: can1
+  scheiber_bitrate_bps: 250000
+  capture_mode: passive read-only
+
+tanks:
+  water_l: 600
+  diesel_1_l: 500
+  diesel_2_l: 500
+
+battery_inventory:
+  house_batteries: 6
+  engine_start_batteries:
+    port: 1
+    starboard: 1
+  generator_start_batteries: 1
+  total_batteries: 9
+
+charger_inventory:
+  total_chargers: 3
+  candidate_nodes:
+    "0x1008": "12 V / 60 A signature; likely house/engine charging"
+    "0x1010": "12 V / 40 A signature; likely house/engine charging"
+    "0x1020": "12 V / 25 A signature; best candidate for generator-start charger"
+
+generator_control:
+  can_id: "0x02460B88"
+  datatype: uint8 enum
+  commands:
+    "0x01": START
+    "0x02": STOP
+  semantic_status: confirmed by operator and present in capture
+  transmit_status: disabled; timing, acknowledgement, interlocks, retries, and fail-safe behavior unvalidated

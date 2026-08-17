@@ -1,0 +1,4 @@
+{"relative_seconds":0.0,"pgn":127505,"name":"Fluid Level","instance":0,"fluid_type":"water","level_percent":84,"capacity_l":600.0,"status":"ready-for-implementation"}
+{"relative_seconds":0.0,"pgn":127505,"name":"Fluid Level","instance":1,"fluid_type":"fuel","level_percent":63,"capacity_l":500.0,"status":"ready-for-implementation"}
+{"relative_seconds":0.0,"pgn":127505,"name":"Fluid Level","instance":2,"fluid_type":"fuel","level_percent":79,"capacity_l":500.0,"status":"ready-for-implementation"}
+{"relative_seconds":1.039372,"pgn":127508,"name":"Battery Status","instance":0,"voltage_v":13.33,"current_a":null,"temperature_k":null,"status":"voltage-ready; current/temperature withheld pending validation"}

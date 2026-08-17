@@ -1,0 +1,44 @@
+line,relative_s,utc,vienna_local,system,event,value,confidence,notes
+574,32.402518,2026-08-17T15:14:17.430805+00:00,2026-08-17T17:14:17.430805+02:00,AC panel,request,OFF,high,Request and applied frames are distinct.
+620,34.82219,2026-08-17T15:14:19.850477+00:00,2026-08-17T17:14:19.850477+02:00,AC panel,request,OFF,high,Request and applied frames are distinct.
+646,36.364815,2026-08-17T15:14:21.393102+00:00,2026-08-17T17:14:21.393102+02:00,AC panel,request,OFF,high,Request and applied frames are distinct.
+662,37.323291,2026-08-17T15:14:22.351578+00:00,2026-08-17T17:14:22.351578+02:00,AC panel,request,OFF,high,Request and applied frames are distinct.
+682,38.481889,2026-08-17T15:14:23.510176+00:00,2026-08-17T17:14:23.510176+02:00,AC panel,request,OFF,high,Request and applied frames are distinct.
+689,38.932917,2026-08-17T15:14:23.961204+00:00,2026-08-17T17:14:23.961204+02:00,AC panel,request,SHORE,high,Request and applied frames are distinct.
+697,39.321805,2026-08-17T15:14:24.350092+00:00,2026-08-17T17:14:24.350092+02:00,AC panel,request,SHORE,high,Request and applied frames are distinct.
+731,41.428459,2026-08-17T15:14:26.456746+00:00,2026-08-17T17:14:26.456746+02:00,House panel,request,OFF,high,Request and applied frames are distinct.
+762,43.017611,2026-08-17T15:14:28.045898+00:00,2026-08-17T17:14:28.045898+02:00,House panel,request,OFF,high,Request and applied frames are distinct.
+787,44.238484,2026-08-17T15:14:29.266771+00:00,2026-08-17T17:14:29.266771+02:00,House panel,request,OFF,high,Request and applied frames are distinct.
+885,49.658548,2026-08-17T15:14:34.686835+00:00,2026-08-17T17:14:34.686835+02:00,Generator,command,START,high,0x02460B88#01; semantic mapping confirmed by operator. Transmission safety unvalidated.
+1047,57.27088,2026-08-17T15:14:42.299167+00:00,2026-08-17T17:14:42.299167+02:00,Charger 1010,AC frequency update,50.0 Hz,high,500=50.0 Hz; 0=off.
+1086,58.540249,2026-08-17T15:14:43.568536+00:00,2026-08-17T17:14:43.568536+02:00,Charger 1020,AC frequency update,50.0 Hz,high,500=50.0 Hz; 0=off.
+1113,59.381882,2026-08-17T15:14:44.410169+00:00,2026-08-17T17:14:44.410169+02:00,Charger 1008,AC frequency update,50.0 Hz,high,500=50.0 Hz; 0=off.
+1169,61.229158,2026-08-17T15:14:46.257445+00:00,2026-08-17T17:14:46.257445+02:00,Generator/AC module,transition marker,AC ramp-down marker,medium,Correlated with voltage direction; distinct from direct 0x02460B88 START/STOP commands.
+1276,66.07619,2026-08-17T15:14:51.104477+00:00,2026-08-17T17:14:51.104477+02:00,AC panel,request,OFF,high,Request and applied frames are distinct.
+1311,67.590816,2026-08-17T15:14:52.619103+00:00,2026-08-17T17:14:52.619103+02:00,AC panel,applied,OFF,high,Request and applied frames are distinct.
+2028,106.121466,2026-08-17T15:15:31.149753+00:00,2026-08-17T17:15:31.149753+02:00,AC panel,request,SHORE,high,Request and applied frames are distinct.
+2055,107.487786,2026-08-17T15:15:32.516073+00:00,2026-08-17T17:15:32.516073+02:00,AC panel,applied,SHORE,high,Request and applied frames are distinct.
+2318,121.216715,2026-08-17T15:15:46.245002+00:00,2026-08-17T17:15:46.245002+02:00,AC panel,request,GENERATOR,high,Request and applied frames are distinct.
+2353,122.772605,2026-08-17T15:15:47.800892+00:00,2026-08-17T17:15:47.800892+02:00,AC panel,applied,OFF,high,Request and applied frames are distinct.
+2365,123.375366,2026-08-17T15:15:48.403653+00:00,2026-08-17T17:15:48.403653+02:00,AC panel,applied,GENERATOR,high,Request and applied frames are distinct.
+2702,142.946875,2026-08-17T15:16:07.975162+00:00,2026-08-17T17:16:07.975162+02:00,House panel,request,OFF,high,Request and applied frames are distinct.
+2731,144.487504,2026-08-17T15:16:09.515791+00:00,2026-08-17T17:16:09.515791+02:00,House panel,applied,OFF,high,Request and applied frames are distinct.
+2748,145.272016,2026-08-17T15:16:10.300303+00:00,2026-08-17T17:16:10.300303+02:00,Charger 1010,AC frequency update,0.0 Hz,high,500=50.0 Hz; 0=off.
+2754,145.475456,2026-08-17T15:16:10.503743+00:00,2026-08-17T17:16:10.503743+02:00,Charger 1020,AC frequency update,0.0 Hz,high,500=50.0 Hz; 0=off.
+2782,146.592418,2026-08-17T15:16:11.620705+00:00,2026-08-17T17:16:11.620705+02:00,Charger 1008,AC frequency update,0.0 Hz,high,500=50.0 Hz; 0=off.
+2965,155.522819,2026-08-17T15:16:20.551106+00:00,2026-08-17T17:16:20.551106+02:00,House panel,request,SHORE,high,Request and applied frames are distinct.
+2988,156.801601,2026-08-17T15:16:21.829888+00:00,2026-08-17T17:16:21.829888+02:00,Generator/AC module,transition marker,AC ramp-up marker,medium,Correlated with voltage direction; distinct from direct 0x02460B88 START/STOP commands.
+2992,156.876785,2026-08-17T15:16:21.905072+00:00,2026-08-17T17:16:21.905072+02:00,House panel,applied,SHORE,high,Request and applied frames are distinct.
+3147,163.98907,2026-08-17T15:16:29.017357+00:00,2026-08-17T17:16:29.017357+02:00,House panel,request,GENERATOR,high,Request and applied frames are distinct.
+3181,165.548663,2026-08-17T15:16:30.576950+00:00,2026-08-17T17:16:30.576950+02:00,House panel,applied,OFF,high,Request and applied frames are distinct.
+3195,166.120721,2026-08-17T15:16:31.149008+00:00,2026-08-17T17:16:31.149008+02:00,House panel,applied,GENERATOR,high,Request and applied frames are distinct.
+3220,167.195415,2026-08-17T15:16:32.223702+00:00,2026-08-17T17:16:32.223702+02:00,Charger 1010,AC frequency update,50.0 Hz,high,500=50.0 Hz; 0=off.
+3231,167.70214,2026-08-17T15:16:32.730427+00:00,2026-08-17T17:16:32.730427+02:00,Charger 1020,AC frequency update,50.0 Hz,high,500=50.0 Hz; 0=off.
+3270,169.266101,2026-08-17T15:16:34.294388+00:00,2026-08-17T17:16:34.294388+02:00,Charger 1008,AC frequency update,50.0 Hz,high,500=50.0 Hz; 0=off.
+3318,171.522536,2026-08-17T15:16:36.550823+00:00,2026-08-17T17:16:36.550823+02:00,Generator/AC module,transition marker,AC ramp-down marker,medium,Correlated with voltage direction; distinct from direct 0x02460B88 START/STOP commands.
+3427,177.378315,2026-08-17T15:16:42.406602+00:00,2026-08-17T17:16:42.406602+02:00,Generator,command,STOP,high,0x02460B88#02; semantic mapping confirmed by operator. Transmission safety unvalidated.
+3451,178.151463,2026-08-17T15:16:43.179750+00:00,2026-08-17T17:16:43.179750+02:00,Charger 1020,AC frequency update,40.0 Hz,high,500=50.0 Hz; 0=off.
+3460,178.448412,2026-08-17T15:16:43.476699+00:00,2026-08-17T17:16:43.476699+02:00,Charger 1010,AC frequency update,0.0 Hz,high,500=50.0 Hz; 0=off.
+3496,179.570076,2026-08-17T15:16:44.598363+00:00,2026-08-17T17:16:44.598363+02:00,Charger 1008,AC frequency update,0.0 Hz,high,500=50.0 Hz; 0=off.
+3499,179.66178,2026-08-17T15:16:44.690067+00:00,2026-08-17T17:16:44.690067+02:00,Charger 1020,AC frequency update,0.0 Hz,high,500=50.0 Hz; 0=off.
+3680,189.600479,2026-08-17T15:16:54.628766+00:00,2026-08-17T17:16:54.628766+02:00,Generator/AC module,transition marker,AC ramp-up marker,medium,Correlated with voltage direction; distinct from direct 0x02460B88 START/STOP commands.
