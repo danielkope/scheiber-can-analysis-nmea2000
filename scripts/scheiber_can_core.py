@@ -14,6 +14,14 @@ CANDUMP_RE = re.compile(
 
 SELECTOR_ENUM = {0x01: "OFF", 0x02: "SHORE", 0x04: "GENERATOR"}
 GENERATOR_COMMAND_ENUM = {0x01: "START", 0x02: "STOP"}
+GENERATOR_STATUS_ENUM = {
+    0x00: "OFF_IDLE",
+    0x01: "RUNNING_SETTLED",
+    0x02: "STARTING",
+    0x03: "STARTING",
+    0x04: "STOPPING",
+    0x05: "STOPPING",
+}
 HOUSE_BATTERY_IDS = {
     0x06020580: "house_battery_candidate_1",
     0x06060580: "house_battery_candidate_2",
@@ -138,5 +146,3 @@ def record(
         status=status,
         notes=notes,
     )
-
-

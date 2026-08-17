@@ -13,6 +13,7 @@ from scheiber_can_core import (  # noqa: E402
     CHARGER_RATING_GUESSES,
     CHARGER_SUFFIXES,
     GENERATOR_COMMAND_ENUM,
+    GENERATOR_STATUS_ENUM,
     HOUSE_BATTERY_IDS,
     SELECTOR_ENUM,
     CandumpFrame,
@@ -21,6 +22,7 @@ from scheiber_can_core import (  # noqa: E402
     u16be,
     u16le,
 )
+
 
 def decode_frame(frame: CandumpFrame, start_ts: float, capacities: Mapping[str, float]) -> list[DecodedRecord]:
     out: list[DecodedRecord] = []
@@ -67,10 +69,21 @@ def decode_frame(frame: CandumpFrame, start_ts: float, capacities: Mapping[str, 
         out.append(record(frame, start_ts, category="generator", name="generator_command",
                           value=GENERATOR_COMMAND_ENUM.get(raw, f"UNKNOWN_0x{raw:02X}"),
                           unit="enum", datatype="uint8 enum", confidence="high", status="confirmed",
-                          notes="0x01=START and 0x02=STOP confirmed by the operator. Semantic mapping is confirmed; replay safety, acknowledgements, timing, and interlocks remain unvalidated."))
+                          notes="0x01=START and 0x02=STOP. These commands initiate the context-aware lifecycle tracked from 0x02440B88 and 0x005A1020."))
         out.append(record(frame, start_ts, category="generator", name="generator_command_raw", value=raw,
                           unit="raw", datatype="uint8", confidence="high", status="confirmed",
                           notes="Direct generator command byte on CAN ID 0x02460B88."))
+        return out
+
+    if cid == 0x02440B88 and len(data) == 1:
+        raw = data[0]
+        out.append(record(frame, start_ts, category="generator", name="generator_status",
+                          value=GENERATOR_STATUS_ENUM.get(raw, f"UNKNOWN_0x{raw:02X}"),
+                          unit="enum", datatype="uint8 enum", confidence="high", status="confirmed",
+                          notes="0x00=OFF_IDLE, 0x01=RUNNING_SETTLED, 0x02/0x03=STARTING, 0x04/0x05=STOPPING. 0x00 was confirmed in follow-on work and is not present in the baseline capture."))
+        out.append(record(frame, start_ts, category="generator", name="generator_status_raw", value=raw,
+                          unit="raw", datatype="uint8", confidence="high", status="confirmed",
+                          notes="Raw generator lifecycle/status byte on CAN ID 0x02440B88."))
         return out
 
     if cid == 0x02040898 and len(data) == 4:
@@ -103,7 +116,7 @@ def decode_frame(frame: CandumpFrame, start_ts: float, capacities: Mapping[str, 
         marker = {0x02: "AC_RAMP_DOWN_MARKER", 0x03: "AC_RAMP_UP_MARKER"}.get(data[0], f"UNKNOWN_0x{data[0]:02X}")
         out.append(record(frame, start_ts, category="generator", name="generator_or_ac_transition_marker", value=marker,
                           unit="enum candidate", datatype="uint8 enum", confidence="medium", status="candidate",
-                          notes="0x02 precedes clean voltage ramp-down; 0x03 precedes clean ramp-up. These are transition markers distinct from the confirmed direct commands on 0x02460B88."))
+                          notes="0x02 precedes clean voltage ramp-down; 0x03 precedes clean ramp-up. These are transition markers distinct from the confirmed direct commands and lifecycle/status frame."))
         return out
 
     if cid in HOUSE_BATTERY_IDS and len(data) == 6:
@@ -127,7 +140,6 @@ def decode_frame(frame: CandumpFrame, start_ts: float, capacities: Mapping[str, 
                           notes="Observed stable 72-74. Packet structure favors SoC; temperature in degF remains a credible alternative."))
         return out
 
-    # Three repeated charger device families use suffix 0x1008/0x1010/0x1020.
     suffix = cid & 0xFFFF
     if suffix in CHARGER_SUFFIXES and len(data) == 8:
         prefix = cid >> 16
@@ -183,11 +195,21 @@ def decode_frame(frame: CandumpFrame, start_ts: float, capacities: Mapping[str, 
             return out
         if prefix == 0x005A:
             raw = u16le(data, 0)
-            out.append(record(frame, start_ts, category="charger", name=f"{node}_ac_frequency", value=round(raw / 10.0, 1),
+            hz = round(raw / 10.0, 1)
+            out.append(record(frame, start_ts, category="charger", name=f"{node}_ac_frequency", value=hz,
                               unit="Hz", datatype="uint16", endian="little", scale="0.1", confidence="high", status="candidate",
                               notes="500 = 50.0 Hz, 400 = 40.0 Hz during decay, 0 = off; remaining words are 0xFFFF."))
+            if suffix == 0x1020:
+                if raw == 500:
+                    signal = "AC_PRESENT_50_HZ"
+                elif raw == 0:
+                    signal = "AC_ABSENT_0_HZ"
+                else:
+                    signal = "TRANSITIONAL_FREQUENCY"
+                out.append(record(frame, start_ts, category="generator", name="generator_lifecycle_ac_signal", value=signal,
+                                  unit="enum", datatype="derived enum from uint16", endian="little", scale="0.1 Hz/count",
+                                  confidence="high", status="confirmed",
+                                  notes="Physical 0x005A1020 frequency signal. The lifecycle tracker promotes 50 Hz to RUNNING only during START and 0 Hz to STOPPED only during STOP, because source switching can also de-energize this node."))
             return out
 
     return out
-
-

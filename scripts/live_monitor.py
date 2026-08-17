@@ -34,6 +34,7 @@ def main() -> int:
     config = json.loads(args.config.read_text(encoding="utf-8"))
     capacities = config["tanks"]
     start_ts = time.time()
+    lifecycle = module.GeneratorLifecycleTracker()
     print(f"Listening read-only on {args.channel}. Press Ctrl-C to stop.")
     try:
         with can.Bus(interface="socketcan", channel=args.channel, receive_own_messages=False) as bus:
@@ -47,11 +48,18 @@ def main() -> int:
                     data=bytes(message.data),
                 )
                 decoded = module.decode_frame(frame, start_ts, capacities)
+                state_events = lifecycle.process(frame, start_ts)
                 if decoded:
                     for row in decoded:
                         print(f"{row.relative_seconds:10.3f} 0x{row.can_id} {row.name}={row.value} {row.unit} [{row.status}/{row.confidence}]")
-                else:
+                elif not state_events:
                     print(f"{timestamp-start_ts:10.3f} 0x{frame.can_id_hex}#{frame.data_hex}")
+                for event in state_events:
+                    accepted = "accepted" if event.accepted else "context-only"
+                    print(
+                        f"{event.relative_seconds:10.3f} GENERATOR {event.signal}: "
+                        f"{event.state_before} -> {event.state_after} [{accepted}]"
+                    )
     except KeyboardInterrupt:
         return 0
     except can.CanError as exc:

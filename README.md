@@ -8,6 +8,7 @@ Reverse-engineering notes, evidence, tools, and a reproducible Raspberry Pi capt
 
 - A complete, hash-identified 228.962 s candump capture, stored as one `.xz` file, with 4,401 valid extended-CAN frames and 45 CAN IDs.
 - A pure-Python decoder and CSV/JSON report generator.
+- A context-aware generator lifecycle state machine.
 - A detailed engineering report in Markdown, PDF, and DOCX form; PDF/DOCX can be rebuilt with `scripts/build_report.sh`.
 - Wiring and Raspberry Pi setup instructions for the SH-C30A.
 - A mapping register with datatypes, endianness, scales, offsets, units, observed ranges, confidence, and proposed NMEA 2000 PGNs.
@@ -31,7 +32,7 @@ The capacities and inventory are centrally defined in [`config/system_config.jso
 
 ## Key findings
 
-### Tanks - confirmed
+### Tanks — confirmed
 
 CAN ID `0x02040580` is four big-endian unsigned 16-bit words:
 
@@ -43,7 +44,7 @@ CAN ID `0x02040580` is four big-endian unsigned 16-bit words:
             +-------------- water    = 0x0054 = 84%
 ```
 
-### Source selectors - confirmed
+### Source selectors — confirmed
 
 The source enum is:
 
@@ -60,14 +61,47 @@ Request and applied-state frames are distinct:
 
 Transfers from shore to generator include an applied intermediate OFF state, consistent with break-before-make behavior.
 
-### Generator commands - confirmed semantics
+## Generator lifecycle — confirmed receive-side sequence
 
-| CAN frame | Meaning | Capture evidence |
-|---|---|---|
-| `02460B88#01` | Generator START | line 885, +49.658548 s |
-| `02460B88#02` | Generator STOP | line 3427, +177.378315 s |
+The generator is represented by three complementary signal families:
 
-The one-byte datatype is `uint8 enum`. The command meanings are confirmed, but this repository still defaults to passive receive-only operation. Do not replay either frame until acknowledgement behavior, required companion frames, timing, retries, interlocks, and fail-safe behavior have been validated on an isolated test setup.
+| CAN ID | Datatype | Scale / enum | Role |
+|---|---|---|---|
+| `0x02460B88` | `uint8 enum` | `01=START`, `02=STOP` | External command / transaction trigger |
+| `0x02440B88` | `uint8 enum` | `00=OFF_IDLE`, `01=RUNNING_SETTLED`, `02/03=STARTING`, `04/05=STOPPING` | Generator lifecycle/status confirmation |
+| `0x005A1020` bytes 0-1 | `uint16 little-endian` | x0.1 Hz | Physical AC-frequency milestone |
+
+### External START
+
+```text
+02460B88#01                 -> STARTING
+02440B88#02 or #03          -> STARTING confirmed
+005A1020 first word = 500   -> 50.0 Hz -> RUNNING
+02440B88#01                 -> RUNNING_SETTLED
+```
+
+### External STOP
+
+```text
+02460B88#02                 -> STOPPING
+02440B88#05 or #04          -> STOPPING confirmed
+005A1020 first word = 0     -> 0.0 Hz -> STOPPED
+02440B88#00                 -> OFF_IDLE
+```
+
+The baseline capture contains START, STARTING confirmation, 50 Hz, RUNNING_SETTLED, STOP, STOPPING confirmation, frequency decay, and 0 Hz. It does **not** contain `02440B88#00`; `OFF_IDLE` was confirmed in later work and is documented as follow-on evidence.
+
+### Why frequency is context-gated
+
+`0x005A1020` also changes when the associated AC path is switched between generator, OFF, and shore. Therefore:
+
+- 50 Hz promotes the lifecycle to `RUNNING` only while a START transaction is active.
+- 0 Hz promotes the lifecycle to `STOPPED` only while a STOP transaction is active.
+- Outside those contexts, the decoder records AC present/absent but does not infer engine state.
+
+This prevents panel source switching from generating false generator starts or stops. See [`docs/GENERATOR_LIFECYCLE.md`](docs/GENERATOR_LIFECYCLE.md).
+
+The repository remains receive-only. The lifecycle mapping is not a safe transmission recipe; command repetition, companion frames, acknowledgements, interlocks, abort handling, timeouts, and fail-safe behavior remain unvalidated.
 
 ### Six house-battery candidates
 
@@ -82,13 +116,13 @@ Each six-byte payload is provisionally decoded as:
 
 | Bytes | Type | Interpretation |
 |---|---|---|
-| 0-1 | `uint16` little-endian, x0.01 | Voltage in volts - high confidence |
-| 2-3 | offset `uint16` little-endian, raw - `0x4E00` | Signed charge/discharge code - sign high confidence; x0.1 A is a working guess |
+| 0-1 | `uint16` little-endian, x0.01 | Voltage in volts — high confidence |
+| 2-3 | offset `uint16` little-endian, raw - `0x4E00` | Signed charge/discharge code — sign high confidence; x0.1 A is a working guess |
 | 4-5 | `uint16` little-endian | 72-74; SoC percent is the primary guess, temperature in degF remains possible |
 
 ### Three charger families
 
-The repeated device suffixes `0x1008`, `0x1010`, and `0x1020` each have heartbeat, telemetry, configuration, and frequency messages. Their `0x005610xx` payload signatures contain:
+The repeated device suffixes `0x1008`, `0x1010`, and `0x1020` each have heartbeat, telemetry, configuration, rating, and frequency messages. Their `0x005610xx` payload signatures contain:
 
 | Device family | Constant bytes | Rating interpretation | Role hypothesis |
 |---|---|---|---|
@@ -104,7 +138,33 @@ For `0x005010xx`, four little-endian `uint16` values plausibly decode as DC volt
          13.5V 20.9A 236.0V   NA  (candidate engineering units)
 ```
 
-For `0x005A10xx`, the first little-endian word is a strong AC-frequency candidate: `0x01F4 = 500 -> 50.0 Hz`, `0x0190 = 400 -> 40.0 Hz`, and zero when off.
+For `0x005A10xx`, the first little-endian word is a strong AC-frequency field: `0x01F4 = 500 -> 50.0 Hz`, `0x0190 = 400 -> 40.0 Hz`, and zero when off.
+
+## Analyze a capture
+
+```bash
+python3 scripts/scheiber_can_analyze.py \
+  your_capture.log \
+  --config config/system_config.json \
+  --output analysis-output
+```
+
+Important outputs include:
+
+- `decoded_fields_long.csv`
+- `event_candidates.csv`
+- `generator_state_timeline.csv`
+- `tank_samples.csv`
+- `house_battery_candidates.csv`
+- `charger_candidates.csv`
+- `capture_metadata.json`
+- `summary.md`
+
+The live monitor also prints context-aware lifecycle transitions:
+
+```bash
+python3 scripts/live_monitor.py --channel can1
+```
 
 ## Engineering report
 
@@ -113,16 +173,6 @@ The source report is [`docs/ENGINEERING_REPORT.md`](docs/ENGINEERING_REPORT.md).
 ```bash
 ./scripts/build_report.sh
 ```
-
-## Publish a fresh public copy
-
-After cloning the supplied Git bundle or unpacking the project, an authenticated GitHub CLI user can create the public repository with:
-
-```bash
-./scripts/publish_public_repo.sh
-```
-
-The default target name is `scheiber-can-analysis-nmea2000`; pass another repository name as the first argument when required.
 
 ## Reproduce the capture
 
@@ -170,18 +220,7 @@ candump can1
 candump -L can1 > scheiber_$(date +%Y%m%d_%H%M%S).log
 ```
 
-The `-L` format includes absolute timestamps and is accepted by the included analyzer. `candump -l can1` is also useful for automatic logfile naming.
-
-### 5. Analyze
-
-```bash
-python3 scripts/scheiber_can_analyze.py \
-  data/raw/d5175281-0a41-493a-ae0d-fb84baba6d2f.log \
-  --config config/system_config.json \
-  --output analysis-output
-```
-
-Outputs include capture metadata, CAN-ID inventory, decoded long-form fields, panel/generator events, tank samples, battery candidates, charger candidates, and a Markdown summary.
+The `-L` format includes absolute timestamps and is accepted by the analyzer. `candump -l can1` is also useful for automatic logfile naming.
 
 ## Bus checks before trusting a capture
 
@@ -210,8 +249,6 @@ Scheiber bus <-> CAN interface A <-> Raspberry Pi gateway <-> CAN interface B <-
 
 The proposed translation is documented in [`docs/NMEA2000_MAPPING.md`](docs/NMEA2000_MAPPING.md). The initial implementation should be read-only on Scheiber and dry-run/log-only on the NMEA side. Source-selection and generator control must remain disabled until safety interlocks and acknowledgements are independently validated.
 
-Public-repository creation and push instructions are in [`docs/PUBLISH_TO_GITHUB.md`](docs/PUBLISH_TO_GITHUB.md).
-
 ## Repository layout
 
 ```text
@@ -219,9 +256,9 @@ config/                 capacities, inventory, mappings
 data/raw/               original candump capture (single .xz file)
 data/examples/          selected evidence frames
 data/derived/           generated CSV/JSON results
-scripts/                analyzer and helper tools
+scripts/                analyzer, lifecycle tracker, and helper tools
 docs/                   engineering report and handoff documentation
-tests/                  decoder regression tests
+tests/                  decoder and lifecycle regression tests
 ```
 
 ## Source references
