@@ -1,39 +1,26 @@
 import hashlib
-import importlib.util
 from pathlib import Path
 import unittest
 
 
-SOURCE_PAYLOAD_SHA256 = "d66c194a4753497dc6f6270e04cf615acc76ef3868efc8ffe522ea992725c208"
-
-
-def load_assembler(root: Path):
-    path = root / "cerbo" / "assemble_bridge.py"
-    spec = importlib.util.spec_from_file_location("scheiber_bridge_assembler", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+EXPECTED_SHA256 = "6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097"
 
 
 class TestCerboBridgeSource(unittest.TestCase):
-    def test_payload_reconstructs_and_tank_unit_fix_compiles(self):
+    def test_canonical_bridge_compiles_and_has_correct_tank_units(self):
         root = Path(__file__).resolve().parents[1]
-        assembler = load_assembler(root)
+        path = root / "cerbo" / "bridge.py"
+        source = path.read_bytes()
+        text = source.decode("utf-8")
 
-        source = assembler.decode_source_chunks(root / "cerbo")
-        self.assertEqual(hashlib.sha256(source).hexdigest(), SOURCE_PAYLOAD_SHA256)
-
-        patched = assembler.apply_source_patches(source)
-        text = patched.decode("utf-8")
-
-        self.assertEqual(text.count("capacity_l / 1000.0"), 2)
-        self.assertIn('"capacity_m3":', text)
-        self.assertIn('"remaining_m3":', text)
+        self.assertEqual(hashlib.sha256(source).hexdigest(), EXPECTED_SHA256)
+        self.assertIn('BRIDGE_VERSION = "5.4.2"', text)
+        self.assertIn('None if capacity_l is None else float(capacity_l) / 1000.0', text)
+        self.assertIn('"capacity_m3": svc["/Capacity"]', text)
+        self.assertIn('"remaining_m3": svc["/Remaining"]', text)
         self.assertNotIn('"capacity_l": svc["/Capacity"]', text)
         self.assertNotIn('"remaining_l": svc["/Remaining"]', text)
-
-        compile(patched, "bridge.py", "exec")
+        compile(source, "bridge.py", "exec")
 
 
 if __name__ == "__main__":
