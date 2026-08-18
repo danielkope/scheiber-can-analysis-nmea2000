@@ -46,32 +46,76 @@ Diesel tank 2 capacity: 0.500 m3
 
 `/Remaining` is calculated from the cubic-metre capacity and `/Level` percentage. The D-Bus text formatter still presents the volume in litres for a human-readable GX display.
 
-## Install on a Cerbo GX
+## Fresh installation on a Cerbo GX
 
-As root, after the PR is merged:
+SSH to the Cerbo as `root` and run:
 
 ```bash
 mkdir -p /data/scheiber-gx-installer
 cd /data/scheiber-gx-installer
+
 wget -O install.sh \
   https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo/install.sh
 chmod +x install.sh
+
 CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
 ```
 
-To test the open branch before merge:
+The installer downloads the complete canonical `cerbo/bridge.py` and `cerbo/service/run` from the repository, validates the Python source and pinned checksum, installs them under `/data/scheiber-gx`, creates/persists the runit service link, and starts the service.
+
+## Update an existing installation
+
+Use the **same installer**. Re-download `install.sh` first so an older local installer cannot retain obsolete packaging logic:
 
 ```bash
-BRANCH=fix/tank-dbus-units
-BASE="https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/$BRANCH/cerbo"
-wget -O install.sh "$BASE/install.sh"
+cd /data/scheiber-gx-installer
+
+wget -O install.sh \
+  https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo/install.sh
 chmod +x install.sh
-RAW_BASE="$BASE" CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
+
+CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
 ```
 
-The installer downloads the complete `bridge.py`, compiles it, verifies its SHA-256, backs up the currently installed script as `/data/scheiber-gx/bridge.py.previous`, installs the runit wrapper, persists the `/service/scheiber-gx` link through `/data/rc.local`, and restarts the service with `svc`.
+For an update, the installer:
+
+1. downloads the entire current `cerbo/bridge.py` to a temporary file;
+2. compiles it with `python3 -m py_compile`;
+3. verifies the pinned SHA-256;
+4. downloads the runit `service/run` wrapper;
+5. backs up the installed runtime as `/data/scheiber-gx/bridge.py.previous`;
+6. replaces `/data/scheiber-gx/bridge.py` with the complete verified repository script;
+7. restarts `/service/scheiber-gx` using `svc`.
 
 A failed download, compile, or checksum occurs before the installed bridge is replaced.
+
+## Install from a checked-out repository
+
+If the repository has already been cloned/copied to the Cerbo:
+
+```bash
+cd /path/to/scheiber-can-analysis-nmea2000
+CAN_IF=can2 CAN_BITRATE=250000 ./cerbo/install.sh
+```
+
+The installer uses the local `cerbo/bridge.py` and `cerbo/service/run` when they are present.
+
+## Verify the installed runtime
+
+```bash
+sha256sum /data/scheiber-gx/bridge.py
+head -n 10 /data/scheiber-gx/bridge.py
+
+tail -n 80 /data/scheiber-gx/bridge.log
+
+dbus -y com.victronenergy.genset.scheiber /Connected GetValue
+```
+
+For bridge 5.4.2, the expected SHA-256 is:
+
+```text
+6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+```
 
 ## Verify the corrected tank units
 
@@ -89,12 +133,18 @@ do
 done
 ```
 
-For levels of 74%, 62%, and 79%, the corresponding volume values should be approximately:
+Example live values after the unit fix:
 
 ```text
-Fresh:    Capacity 0.600  Remaining 0.444
-Diesel 1: Capacity 0.500  Remaining 0.310
-Diesel 2: Capacity 0.500  Remaining 0.395
+Fresh:    Level 74  Capacity 0.600  Remaining 0.444
+Diesel 1: Level 63  Capacity 0.500  Remaining 0.315
+Diesel 2: Level 79  Capacity 0.500  Remaining 0.395
 ```
+
+## Signal K / NMEA 2000
+
+When Signal K is installed on the Cerbo, the native Victron tank services are visible through the Venus integration and can be forwarded to the vessel NMEA 2000 network using the standard `signalk-to-nmea2000` plugin.
+
+The three tanks have been live-validated as PGN 127505 Fluid Level on the Cerbo VE.Can/NMEA 2000 connection. See [`../docs/SIGNALK_NMEA2000.md`](../docs/SIGNALK_NMEA2000.md) for the current instance mapping, loopback verification, and B&G Zeus3 display guidance.
 
 Read [`../docs/CERBO_GX_INTEGRATION.md`](../docs/CERBO_GX_INTEGRATION.md) for wiring, D-Bus architecture, generator lifecycle, diagnostics, rollback, and the post-stop `OFF_IDLE` restart caveat.
