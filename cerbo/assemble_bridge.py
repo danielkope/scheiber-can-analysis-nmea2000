@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reconstruct the reviewed bridge.py and apply repository-maintained fixes.
 
-The large field-tested source is kept as an immutable base64 payload. Small,
+The large field-tested source is kept as immutable base64 payload chunks. Small,
 reviewable corrections discovered after field validation are applied here so
 that the original source provenance remains verifiable.
 """
@@ -14,6 +14,25 @@ from pathlib import Path
 
 # SHA-256 of the reviewed v5.4.1 repository payload before post-validation fixes.
 SOURCE_PAYLOAD_SHA256 = "c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3"
+SOURCE_PARTS = ("bridge.py.part1", "bridge.py.part2")
+
+
+def decode_source_chunks(root: Path) -> bytes:
+    """Decode each payload chunk independently, then concatenate the bytes.
+
+    The repository chunks are separately base64-encoded and therefore each may
+    contain its own '=' padding. Concatenating their encoded text before calling
+    b64decode makes Python 3.12 correctly reject the input as "Excess data after
+    padding". Decode each chunk first and concatenate the decoded byte strings.
+    """
+    decoded = []
+    for name in SOURCE_PARTS:
+        encoded = (root / "source" / name).read_text(encoding="ascii").strip()
+        try:
+            decoded.append(base64.b64decode(encoded, validate=True))
+        except Exception as exc:
+            raise RuntimeError(f"invalid base64 payload in {name}: {exc}") from exc
+    return b"".join(decoded)
 
 
 def apply_source_patches(data: bytes) -> bytes:
@@ -95,11 +114,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent
-    encoded = "".join(
-        (root / "source" / name).read_text(encoding="ascii").strip()
-        for name in ("bridge.py.part1", "bridge.py.part2")
-    )
-    source = base64.b64decode(encoded, validate=True)
+    source = decode_source_chunks(root)
     source_digest = hashlib.sha256(source).hexdigest()
     if source_digest != SOURCE_PAYLOAD_SHA256:
         raise SystemExit(
