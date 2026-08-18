@@ -9,20 +9,21 @@ CAN_IF="${CAN_IF:-can2}"
 CAN_BITRATE="${CAN_BITRATE:-250000}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+EXPECTED_BRIDGE_SHA256="6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097"
 
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: run this installer as root." >&2
     exit 1
 fi
 
-for cmd in python3 ip sha256sum ln chmod mkdir mv; do
+for cmd in python3 ip sha256sum ln chmod mkdir mv cp rm grep awk; do
     command -v "$cmd" >/dev/null 2>&1 || {
         echo "ERROR: required command not found: $cmd" >&2
         exit 1
     }
 done
 
-mkdir -p "$APP_DIR/service" "$APP_DIR/source"
+mkdir -p "$APP_DIR/service"
 
 fetch_file() {
     src_name="$1"
@@ -47,26 +48,35 @@ fetch_file() {
     exit 1
 }
 
+# Fetch and validate the complete canonical script before touching the running
+# installation. A failed download, compile, or checksum leaves the old bridge
+# in place.
+fetch_file "bridge.py" "$APP_DIR/bridge.py.new"
+python3 -m py_compile "$APP_DIR/bridge.py.new"
+
+actual_sha="$(sha256sum "$APP_DIR/bridge.py.new" | awk '{print $1}')"
+if [ "$actual_sha" != "$EXPECTED_BRIDGE_SHA256" ]; then
+    echo "ERROR: bridge.py SHA-256 mismatch." >&2
+    echo "Expected: $EXPECTED_BRIDGE_SHA256" >&2
+    echo "Actual:   $actual_sha" >&2
+    rm -f "$APP_DIR/bridge.py.new"
+    exit 1
+fi
+
+fetch_file "service/run" "$APP_DIR/service/run.new"
+
+# Only after validation succeeds do we back up and replace the installed files.
 if [ -f "$APP_DIR/bridge.py" ]; then
     cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
 fi
-
-# The repository keeps the large field-tested bridge as a pinned payload and
-# applies small post-validation fixes in assemble_bridge.py. The assembler
-# verifies the original payload SHA, requires the expected patch counts, and
-# compiles the resulting Python before it can be installed.
-fetch_file "source/bridge.py.part1" "$APP_DIR/source/bridge.py.part1"
-fetch_file "source/bridge.py.part2" "$APP_DIR/source/bridge.py.part2"
-fetch_file "assemble_bridge.py" "$APP_DIR/assemble_bridge.py"
-chmod 755 "$APP_DIR/assemble_bridge.py"
-
-python3 "$APP_DIR/assemble_bridge.py" -o "$APP_DIR/bridge.py.new"
-python3 -m py_compile "$APP_DIR/bridge.py.new"
-actual_sha="$(sha256sum "$APP_DIR/bridge.py.new" | awk '{print $1}')"
 mv "$APP_DIR/bridge.py.new" "$APP_DIR/bridge.py"
-
-fetch_file "service/run" "$APP_DIR/service/run"
+mv "$APP_DIR/service/run.new" "$APP_DIR/service/run"
 chmod 755 "$APP_DIR/bridge.py" "$APP_DIR/service/run"
+
+# Remove obsolete packaging files from earlier installer revisions. They are no
+# longer part of the runtime or installation path.
+rm -f "$APP_DIR/assemble_bridge.py"
+rm -rf "$APP_DIR/source"
 
 echo "$CAN_IF" > "$APP_DIR/CAN_INTERFACE"
 echo "$CAN_BITRATE" > "$APP_DIR/CAN_BITRATE"
@@ -105,9 +115,11 @@ cat <<EOF2
 Scheiber GX bridge installed.
 
   bridge:    $APP_DIR/bridge.py
+  version:   5.4.2
   service:   $SERVICE_LINK
   CAN:       $CAN_IF @ $CAN_BITRATE bit/s
   SHA-256:   $actual_sha
+  backup:    $APP_DIR/bridge.py.previous
   log:       $APP_DIR/bridge.log
   status:    $APP_DIR/status.json
 
