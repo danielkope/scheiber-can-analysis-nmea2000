@@ -2,7 +2,7 @@
 
 This engineering report is split into review-friendly Markdown sections. The build script concatenates them in filename order to generate the complete PDF and DOCX report.
 
-> **Evidence scope:** the generated report is intentionally anchored to the original hash-identified passive capture. Follow-on live control validation and the current Victron Cerbo GX production integration are documented separately in [`GENERATOR_LIFECYCLE.md`](GENERATOR_LIFECYCLE.md) and [`CERBO_GX_INTEGRATION.md`](CERBO_GX_INTEGRATION.md). This keeps the historical evidence package reproducible while preventing newer field results from drifting out of the repository.
+> **Evidence scope:** the generated report is intentionally anchored to the original hash-identified passive capture. Follow-on live control validation, the current Victron Cerbo GX production integration, and live Signal K/NMEA 2000 publication are documented separately in focused addenda. This keeps the historical evidence package reproducible while preventing newer field results from drifting out of the repository.
 
 ## Sections
 
@@ -35,7 +35,9 @@ This engineering report is split into review-friendly Markdown sections. The bui
 
 - [`GENERATOR_LIFECYCLE.md`](GENERATOR_LIFECYCLE.md): passive lifecycle model plus follow-on live START/STOP, OFF_IDLE, and Victron state-management findings.
 - [`CERBO_GX_INTEGRATION.md`](CERBO_GX_INTEGRATION.md): tested bridge version, installation, D-Bus architecture, mappings, diagnostics, limitations, and rollback.
-- [`MAPPING_TABLE.md`](MAPPING_TABLE.md): current consolidated mapping register, including fields confirmed after the original report was generated.
+- [`SIGNALK_NMEA2000.md`](SIGNALK_NMEA2000.md): live Signal K -> NMEA 2000 tank output, PGN 127505 instance mapping, VE.Can loopback verification, and B&G Zeus3 guidance.
+- [`NMEA2000_MAPPING.md`](NMEA2000_MAPPING.md): current standard-PGN publication plan and live/deferred status.
+- [`MAPPING_TABLE.md`](MAPPING_TABLE.md): current consolidated Scheiber CAN mapping register, including fields confirmed after the original report was generated.
 
 ## Build the baseline report
 
