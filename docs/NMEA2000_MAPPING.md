@@ -20,9 +20,9 @@ This avoids duplicating protocol decoding in two gateways and keeps the standard
 
 | Scheiber / Victron signal | NMEA 2000 PGN | Instance plan | Status |
 |---|---:|---|---|
-| Fresh water level + 600 L capacity | 127505 Fluid Level | **6**, Water | **live on NMEA 2000** |
-| Diesel tank 1 level + 500 L capacity | 127505 Fluid Level | **7**, Fuel | **live on NMEA 2000** |
-| Diesel tank 2 level + 500 L capacity | 127505 Fluid Level | **8**, Fuel | **live on NMEA 2000** |
+| Fresh water level + 600 L capacity | 127505 Fluid Level | **0**, Water | preferred Zeus3 mapping; PGN live-tested |
+| Diesel tank 1 level + 500 L capacity | 127505 Fluid Level | **1**, Fuel | preferred Zeus3 mapping; PGN live-tested |
+| Diesel tank 2 level + 500 L capacity | 127505 Fluid Level | **2**, Fuel | preferred Zeus3 mapping; PGN live-tested |
 | Generator starter battery voltage | 127508 Battery Status | assign unused battery instance | recommended next; source field strong |
 | Six house battery voltages | 127508 Battery Status | deliberate unique instances | voltage confirmed; optional |
 | Six house battery SoC values | 127506 DC Detailed Status | same house-battery instances | SoC confirmed for this installation; optional |
@@ -45,7 +45,7 @@ tanks.fuel.91
 tanks.fuel.92
 ```
 
-They are currently mapped by `signalk-to-nmea2000` to:
+The first successful NMEA 2000 test used instances 6/7/8:
 
 ```text
 tanks.freshWater.90 -> PGN 127505, instance 6, Water
@@ -53,7 +53,7 @@ tanks.fuel.91       -> PGN 127505, instance 7, Fuel
 tanks.fuel.92       -> PGN 127505, instance 8, Fuel
 ```
 
-Live loopback on the Cerbo NMEA 2000 connection has been observed as:
+Live loopback on the Cerbo NMEA 2000 connection was observed as:
 
 ```text
 tanks.freshWater.6  source n2k-on-ve.can-socket.209 (127505)
@@ -69,7 +69,19 @@ Diesel 1: 63%, 0.500 m3
 Diesel 2: 79%, 0.500 m3
 ```
 
-The observed NMEA source addresses `209/210/211` are not tank instances and must not be treated as stable identifiers. Tank instances are the values carried in PGN 127505: `6/7/8`.
+That proves PGN 127505 output and VE.Can/NMEA 2000 loopback. The observed source addresses `209/210/211` are not tank instances and must not be treated as stable identifiers.
+
+### Preferred Zeus3 instances
+
+B&G Zeus3 receives PGN 127505 and its installation documentation states a maximum of five Fluid Level tanks. To maximize compatibility with the Zeus fuel/tank UI, use low unused instances 0/1/2 for the final configuration:
+
+```text
+tanks.freshWater.90 -> PGN 127505, instance 0, Water
+tanks.fuel.91       -> PGN 127505, instance 1, Fuel
+tanks.fuel.92       -> PGN 127505, instance 2, Fuel
+```
+
+Check Signal K Source Discovery first if other NMEA 2000 tank sources are later added to the vessel.
 
 See [`SIGNALK_NMEA2000.md`](SIGNALK_NMEA2000.md) for Signal K configuration, Zeus3 compatibility, verification, and recommended next data.
 
