@@ -1,142 +1,140 @@
 # Future-engineer handoff
 
-## Evidence package
+## Evidence baseline
 
-- Raw capture: `data/raw/d5175281-0a41-493a-ae0d-fb84baba6d2f.log.xz` (extract before analysis)
-- SHA-256 of uncompressed capture: `47296d01c77acc01bc32621e8b0bbdb7c6f7e4837da1c207342baba30a281641`
-- Capture size: 207,809 bytes
-- Frames: 4,401
-- Parse errors: 0
-- Unique extended CAN IDs: 45
-- Duration: 228.962155 seconds
+The original passive evidence package remains unchanged:
+
+- raw capture: `data/raw/d5175281-0a41-493a-ae0d-fb84baba6d2f.log.xz`
+- uncompressed SHA-256: `47296d01c77acc01bc32621e8b0bbdb7c6f7e4837da1c207342baba30a281641`
+- frames: 4,401
+- unique extended CAN IDs: 45
+- duration: 228.962155 s
 - UTC interval: 2026-08-17 15:13:45.028287 to 15:17:33.990442
-- Vienna local interval: 2026-08-17 17:13:45.028287 to 17:17:33.990442 CEST
 
-## Operator-reported system
+The baseline reconstructs START through RUNNING_SETTLED and STOP through 0 Hz / STOPPED. It does not contain `02440B88#00`; that state was confirmed later.
 
-- Six house batteries.
-- Two engine-start batteries: port and starboard.
-- One generator-start battery.
-- Three battery chargers; two participate in house/engine charging, one charges the generator battery.
-- Water tank: 600 L.
-- Diesel tank 1: 500 L.
-- Diesel tank 2: 500 L.
-- Two source-selection panels: AC and House.
+## Current Cerbo production integration
 
-## Operator action order represented in the capture
-
-1. Generator ON.
-2. AC panel: Generator -> OFF.
-3. AC panel: OFF -> Shore.
-4. AC panel: Shore -> Generator.
-5. House panel: Generator -> OFF.
-6. House panel: OFF -> Shore.
-7. House panel: Shore -> Generator.
-8. Generator OFF.
-
-The request/applied selector sequence is well supported. Four `0x02140898` frames are AC ramp-direction markers and are not direct generator commands.
-
-## Confirmed generator lifecycle
-
-### External START
+Tested environment:
 
 ```text
-02460B88#01                 -> STARTING
-02440B88#02/#03             -> STARTING confirmed
-005A1020 first LE word 500  -> 50.0 Hz -> RUNNING
-02440B88#01                 -> RUNNING_SETTLED
+Cerbo GX / Venus OS v3.75
+kernel 6.12.90-venus-2, armv7l
+DSD TECH SH-C30A / gs_usb
+Scheiber CAN can2 @ 250000 bit/s
+service /service/scheiber-gx
+persistent app /data/scheiber-gx
 ```
 
-Baseline evidence:
-
-| Line | Relative time | Frame | State after |
-|---:|---:|---|---|
-| 885 | 49.658548 s | `02460B88#01` | STARTING |
-| 887 | 49.666932 s | `02440B88#02` | STARTING |
-| 899 | 50.368585 s | `02440B88#03` | STARTING |
-| 931 | 52.162626 s | `02440B88#02` | STARTING |
-| 1086 | 58.540249 s | `005A1020#F401FFFFFFFFFFFF` | RUNNING |
-| 1102 | 59.092541 s | `02440B88#03` | RUNNING; lingering STARTING status does not regress state |
-| 1544 | 79.600994 s | `02440B88#01` | RUNNING_SETTLED |
-
-### External STOP
+Bridge:
 
 ```text
-02460B88#02                 -> STOPPING
-02440B88#05/#04             -> STOPPING confirmed
-005A1020 first LE word 0    -> 0.0 Hz -> STOPPED
-02440B88#00                 -> OFF_IDLE
+version 5.4.1
+D-Bus service com.victronenergy.genset.scheiber
+Victron manager com.victronenergy.generator.startstop1
+repository assembled SHA-256 c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3
+field-tested pre-comment-reconciliation SHA-256 b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1
 ```
 
-Baseline evidence:
+Executable statements are unchanged between those two hashes; repository comments/documentation were reconciled with later confirmed SoC/capacity/restart findings.
 
-| Line | Relative time | Frame | State after |
-|---:|---:|---|---|
-| 3427 | 177.378315 s | `02460B88#02` | STOPPING |
-| 3429 | 177.386191 s | `02440B88#05` | STOPPING |
-| 3436 | 177.641176 s | `02440B88#04` | STOPPING |
-| 3451 | 178.151463 s | `005A1020#9001FFFFFFFFFFFF` | STOPPING; 40.0 Hz decay |
-| 3499 | 179.661780 s | `005A1020#0000FFFFFFFFFFFF` | STOPPED |
+Installation and debugging are in `docs/CERBO_GX_INTEGRATION.md`; the installer is `cerbo/install.sh`.
 
-`02440B88#00` was confirmed in follow-on work but is absent from the baseline file. Do not claim that the supplied capture reaches `OFF_IDLE`; its reconstructed final state is `STOPPED`.
+## Proven generator control
 
-### Frequency context guard
+```text
+02460B88#01 = START
+02460B88#02 = STOP
+```
 
-`0x005A1020` also changes when the associated AC path is switched. The baseline contains 0 Hz before the STOP command and 50 Hz later without a new START command. Therefore:
+Both commands were live-tested. Production behavior is one CAN transmission per accepted Victron transition, with no automatic retries.
 
-- 50 Hz means `RUNNING` only during an active START transaction.
-- 0 Hz means `STOPPED` only during an active STOP transaction.
-- Outside those contexts, record AC present/absent and leave engine state unchanged.
+Feedback:
 
-This rule is implemented in `scripts/generator_state_machine.py` and is essential to avoid false generator lifecycle events during panel switching.
+```text
+02440B88#01       RUNNING_SETTLED
+02440B88#00       OFF_IDLE
+02440B88#02/#03   STARTING
+02440B88#04/#05   STOPPING
+005A1020 LE16*0.1 generator-specific Hz
+```
 
-## Highest-value results
+Live tests also established that `02040898` can show shore/common 235 V / 50 Hz while generator-specific `005A1020` remains 0 Hz with the generator off.
 
-1. Tank levels and capacities are ready for NMEA 2000 PGN 127505 translation.
-2. Both source selectors and their request/applied distinction are decoded.
-3. AC voltage and frequency are decoded for the `0x0898` module.
-4. Direct generator command, lifecycle/status enum, and context-gated frequency progression are decoded.
-5. Six individual house-battery voltage streams are identified.
-6. The house-battery current field has an exact signed zero offset (`0x4E00`); only physical scale remains.
-7. Three charger device families are identified, with credible 12 V / 60 A, 12 V / 40 A, and 12 V / 25 A signatures.
-8. Charger AC input voltage and frequency fields are strong candidates.
-9. Physical port/starboard/generator battery assignments remain unresolved and require controlled loads.
+## Victron behavior validated
 
-## Analyzer and outputs
+- connected-genset `/Start` is manager-owned command state;
+- physical feedback updates `/StatusCode`, never `/Start`;
+- external Scheiber START can be adopted through manager `/ManualStart=1` without duplicate CAN TX;
+- native timed runs count down `/ManualStartTimer`, count up `/Runtime`, and stop with one CAN STOP at expiry;
+- manager restart recovery suppresses the replacement manager's initialization STOP and restores manual/timed ownership;
+- the old gui-v2 live +/- timer controls are no longer present in current UI source; do not add fake D-Bus flags to the bridge to chase that UI behavior.
+
+## Important current limitation
+
+After STOP, 0 Hz / `STOPPED` occurs before `02440B88#00` / `OFF_IDLE`. The settling delay was around one minute in a live test. A START sent during that window was ignored by Scheiber; a START from `OFF_IDLE` succeeded.
+
+A future v5.4.2 candidate should queue a Victron `/Start=1` received while recently `STOPPED`, send exactly one physical START upon `#00`, and cancel the queued action if Victron returns `/Start=0` first. Do not implement retries and do not alter `/ManualStartTimer` semantics.
+
+## Current telemetry
+
+### Tanks
+
+`02040580` BE words: fresh %, diesel1 %, diesel2 %. Capacities: 600 L, 500 L, 500 L. Published as native Victron tank services.
+
+### House batteries
+
+Six IDs:
+
+```text
+06020580 06060580 060A0580 060E0580 06120580 06160580
+```
+
+- bytes 0-1 LE x0.01 V: confirmed;
+- bytes 2-3 `(raw-0x4E00)*0.1 A`: sign/offset strong, scale candidate;
+- bytes 4-5 LE x1 %: SoC confirmed for this installation.
+
+Keep the existing SmartShunt explicitly selected as the GX system battery. The bridge intentionally refuses to register extra battery services while the selection is `default`.
+
+### Engine batteries
+
+`06140580` and `06180580` are experimental A/B channels. Current voltage scale 0.00053 V/count is plausible but still requires one-engine-at-a-time crank validation and port/starboard assignment.
+
+### Generator starter
+
+`00501020` bytes 0-1 LE x0.1 V is published as starter voltage. Charger current and AC input are diagnostic/candidate fields.
+
+### Source panels
+
+Applied source: `02400B90` AC and `02400B88` House; enum `01 OFF / 02 SHORE / 04 GENERATOR`. Panel voltage is bytes 4-5 BE of `02040B90` / `02040B88`.
+
+Request IDs `02420B90` / `02420B88` are documented but not transmitted by the bridge.
+
+## Deferred work
+
+1. Post-stop queued START until `OFF_IDLE`.
+2. Optional synthetic `com.victronenergy.acsystem.scheiber` for correct Shore/Generator topology/UI on systems with no VE.Bus/acsystem. Keep source selection receive-only and do not expose unsupported control paths.
+3. Labelled HVAC/air-conditioning CAN capture now that the units can be operated one at a time.
+4. Engine A/B physical identity and scale validation.
+5. Physical house-battery 1-6 ordering.
+
+## Service/debug commands
 
 ```bash
-xz -dc data/raw/d5175281-0a41-493a-ae0d-fb84baba6d2f.log.xz > /tmp/scheiber.log
-python3 scripts/scheiber_can_analyze.py /tmp/scheiber.log \
-  --config config/system_config.json \
-  --output analysis-output
+svc -d /service/scheiber-gx
+svc -u /service/scheiber-gx
+
+tail -n 100 /data/scheiber-gx/bridge.log
+cat /data/scheiber-gx/status.json
+ip -details -statistics link show can2
+
+dbus -y com.victronenergy.genset.scheiber /Connected GetValue
+dbus -y com.victronenergy.genset.scheiber /Start GetValue
+dbus -y com.victronenergy.genset.scheiber /StatusCode GetValue
+
+dbus -y com.victronenergy.generator.startstop1 /ManualStart GetValue
+dbus -y com.victronenergy.generator.startstop1 /ManualStartTimer GetValue
+dbus -y com.victronenergy.generator.startstop1 /RunningByCondition GetValue
 ```
 
-Key outputs:
-
-- `generator_state_timeline.csv`: chronological, context-aware generator state reconstruction.
-- `event_candidates.csv`: command, status, transition-marker, frequency, and panel events.
-- `decoded_fields_long.csv`: all decoded fields with datatype, unit, endian, scale, confidence, and status.
-- `capture_metadata.json`: hash and capture metadata.
-- `summary.md`: human-readable summary.
-
-## Do not assume
-
-- Do not assume CAN ID order equals physical battery order.
-- Do not assume the 25 A charger role is proven solely from its rating.
-- Do not assume house-battery field 3 is SoC rather than temperature until tested.
-- Do not use `0x02140898` as the generator START/STOP command.
-- Do not use `0x005A1020` frequency alone as global engine state; source switching affects it.
-- Do not assume `0x02440B88#02/#03` or `#05/#04` exact substage meanings beyond STARTING/STOPPING.
-- Although command and receive-side lifecycle semantics are confirmed, do not assume replay is safe without validating companion frames, timing, acknowledgements, retries, interlocks, aborts, and fail-safe behavior.
-- Do not connect Scheiber CAN and NMEA 2000 as one electrical bus.
-
-## Next recommended experiment
-
-The highest-value next capture is a labelled, one-variable-at-a-time run that records:
-
-- multiple complete START and STOP cycles, including the final `02440B88#00`;
-- every adjacent `0x02160B88` and `0x02140B88` companion frame;
-- exact button press, crank start, AC-present, settled-running, stop request, AC-loss, engine-stop, and idle timestamps;
-- each of the six house batteries with a known small load;
-- port, starboard, and generator battery voltages under distinct loads;
-- each charger independently disabled/enabled.
+Use `svc`, not `sv`, on the tested Venus image.

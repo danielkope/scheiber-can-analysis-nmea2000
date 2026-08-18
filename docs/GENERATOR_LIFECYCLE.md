@@ -1,155 +1,151 @@
-# Generator lifecycle state machine
+# Generator lifecycle, control, and Victron ownership
 
-## Purpose
+## Scope
 
-This document defines the confirmed receive-side interpretation of the generator START and STOP progression. It separates three concepts that must not be conflated:
-
-1. **External command:** an operator or controller requests START or STOP.
-2. **Lifecycle/status confirmation:** the generator controller reports STARTING, STOPPING, settled running, or idle.
-3. **Physical AC milestone:** the associated `0x1020` device reports generator-side AC frequency.
-
-The implementation is in `scripts/generator_state_machine.py`. It is passive and never transmits CAN frames.
+This document combines the original passive lifecycle evidence with follow-on live validation of the exact generator START/STOP commands and the Victron connected-genset integration. The baseline capture remains reproducible and should not be rewritten to imply observations it did not contain.
 
 ## Signal definitions
 
-| CAN ID | DLC | Bytes | Datatype | Endian / scale | Confirmed meaning |
-|---|---:|---|---|---|---|
-| `0x02460B88` | 1 | 0 | `uint8 enum` | n/a | `0x01=START`, `0x02=STOP` external command |
-| `0x02440B88` | 1 | 0 | `uint8 enum` | n/a | Generator lifecycle/status enum |
-| `0x005A1020` | 8 | 0-1 | `uint16` | little-endian, x0.1 Hz | Generator-associated AC-frequency signal; remaining words are `0xFFFF` in the capture |
+| CAN ID | DLC | Meaning | Decode / enum | Status |
+|---|---:|---|---|---|
+| `0x02460B88` | 1 | generator command | `01=START`, `02=STOP` | semantics confirmed in capture; both payloads live-tested TX |
+| `0x02440B88` | 1 | generator lifecycle/status | `00=OFF_IDLE`, `01=RUNNING_SETTLED`, `02/03=STARTING`, `04/05=STOPPING` | confirmed grouping |
+| `0x005A1020` | 8 | generator-specific frequency | bytes 0-1 `uint16LE * 0.1 Hz` | confirmed field; generator-specific in follow-on test |
+| `0x02040898` | 8 | shared/common AC telemetry | bytes 0-1 BE V, 2-3 BE Hz | not sufficient for generator state |
 
-### `0x02440B88` status enum
+`02440B88#06/#07` remain abort/error candidates.
 
-| Payload | State | Interpretation |
-|---:|---|---|
-| `0x00` | `OFF_IDLE` | Final idle terminal state after stop |
-| `0x01` | `RUNNING_SETTLED` | Stable terminal state after successful startup |
-| `0x02` | `STARTING` | Startup sequence status |
-| `0x03` | `STARTING` | Startup sequence status / later startup phase |
-| `0x04` | `STOPPING` | Shutdown sequence status |
-| `0x05` | `STOPPING` | Shutdown sequence status / earlier shutdown phase |
+## Exact live-tested commands
 
-The semantic grouping is confirmed. Whether `0x02` versus `0x03`, and `0x05` versus `0x04`, encode exact substages, acknowledgements, or actuator phases remains unresolved.
+```bash
+cansend can2 02460B88#01   # START
+cansend can2 02460B88#02   # STOP
+```
 
-## Confirmed START progression
+The production bridge emits these only for an accepted Victron `/Start` transition. It sends one command and no automatic retry.
+
+## START progression
 
 ```text
-External START
+Victron or physical START
     |
     +-- 02460B88#01 ------------------------------> STARTING
-    |
-    +-- 02440B88#02 / 02440B88#03 ----------------> STARTING confirmed
-    |
-    +-- 005A1020 first LE word = 500 = 50.0 Hz ---> RUNNING
-    |
+    +-- 02440B88#02/#03 --------------------------> STARTING confirmed
+    +-- 005A1020 ~= 50 Hz, held 3 s --------------> RUNNING
     +-- 02440B88#01 ------------------------------> RUNNING_SETTLED
 ```
 
-Baseline evidence:
+The baseline capture shows the same receive-side progression. A late `#02/#03` after nominal frequency must not regress RUNNING back to STARTING.
 
-| Capture line | Relative time | Frame | Interpretation |
-|---:|---:|---|---|
-| 885 | 49.658548 s | `02460B88#01` | External START command; transaction begins |
-| 887 | 49.667? s | `02440B88#02` | STARTING confirmed |
-| 899 | 50.368585 s | `02440B88#03` | STARTING confirmed / progressed |
-| 931 | 52.162626 s | `02440B88#02` | Repeated STARTING status |
-| 1086 | 58.540249 s | `005A1020#F401FFFFFFFFFFFF` | `0x01F4=500`, therefore 50.0 Hz; lifecycle becomes RUNNING |
-| 1102 | 59.092541 s | `02440B88#03` | Lingering STARTING status; implementation does not regress RUNNING to STARTING |
-| 1544 | 79.600994 s | `02440B88#01` | RUNNING_SETTLED |
-
-The state machine deliberately keeps `RUNNING` when a late `#03` follows the 50 Hz milestone. The later `#01` is the settled terminal confirmation.
-
-## Confirmed STOP progression
+## STOP progression
 
 ```text
-External STOP
+Victron or physical STOP
     |
     +-- 02460B88#02 ------------------------------> STOPPING
-    |
-    +-- 02440B88#05 / 02440B88#04 ----------------> STOPPING confirmed
-    |
-    +-- 005A1020 first LE word = 0 = 0.0 Hz ------> STOPPED
-    |
+    +-- 02440B88#05/#04 --------------------------> STOPPING confirmed
+    +-- 005A1020 = 0.0 Hz ------------------------> STOPPED
     +-- 02440B88#00 ------------------------------> OFF_IDLE
 ```
 
-Baseline evidence:
+The baseline capture ends at 0 Hz / `STOPPED`; `#00` was confirmed in later live work.
 
-| Capture line | Relative time | Frame | Interpretation |
-|---:|---:|---|---|
-| 3427 | 177.378315 s | `02460B88#02` | External STOP command; transaction begins |
-| 3429 | 177.386191 s | `02440B88#05` | STOPPING confirmed |
-| 3436 | 177.641176 s | `02440B88#04` | STOPPING confirmed / progressed |
-| 3451 | 178.151463 s | `005A1020#9001FFFFFFFFFFFF` | `0x0190=400`, therefore 40.0 Hz during decay |
-| 3499 | 179.661780 s | `005A1020#0000FFFFFFFFFFFF` | 0.0 Hz; lifecycle becomes STOPPED |
+## Generator-specific frequency finding
 
-`02440B88#00` was confirmed in follow-on work but is not present in the supplied baseline capture. Consequently, the generated lifecycle timeline for that file correctly ends at `STOPPED`, not `OFF_IDLE`.
+The original capture required context gating because AC source switching also changed 0x1020-related telemetry. Follow-on live testing separated the signals more clearly: while the generator was OFF and shore remained present, `005A1020` stayed at 0.0 Hz while `02040898` still reported approximately 235 V / 50 Hz. Bridge v5.4.1 therefore treats `005A1020` as the generator-specific running milestone and `02040898` as shared/fallback AC telemetry.
 
-## Context gating of `0x005A1020`
+## Physical state to Victron `/StatusCode`
 
-Frequency is a physical measurement, not a sufficient standalone engine-state signal. The baseline capture also contains:
+| Bridge physical state | StatusCode |
+|---|---:|
+| `UNKNOWN` / stopped idle | 0 once settled evidence is available |
+| `STARTING` | 1 |
+| `RUNNING` | 8 |
+| `RUNNING_SETTLED` | 8 |
+| `STOPPING` | 9 |
+| `STOPPED` | 0 |
+| `OFF_IDLE` | 0 |
+| actual error | 10 only when genuinely known |
 
-- `005A1020=0.0 Hz` during panel/source switching before the external STOP command.
-- `005A1020=50.0 Hz` during a later source transition without a new external START command.
+## D-Bus ownership rule
 
-Those events show that the `0x1020` AC path can be energized or de-energized independently of the generator engine lifecycle. The tracker therefore applies these rules:
+The connected-genset service is:
 
-| Frequency event | Active transaction | Lifecycle result |
-|---|---|---|
-| 50.0 Hz | START / STARTING | `RUNNING` |
-| 50.0 Hz | none or STOP | Record AC present; do not change generator state |
-| 0.0 Hz | STOP / STOPPING | `STOPPED` |
-| 0.0 Hz | none or START | Record AC absent; do not change generator state |
-| Transitional nonzero frequency | START | Record frequency build; retain current startup state |
-| Transitional nonzero frequency | STOP | Record frequency decay; retain `STOPPING` |
+```text
+com.victronenergy.genset.scheiber
+```
 
-This is the main guard against false lifecycle transitions caused by shore/generator source selection.
+Victron `dbus-generator` discovers it and creates the normal connected-genset manager, typically:
 
-## State transition table
+```text
+com.victronenergy.generator.startstop1
+```
 
-| Current state | Input | Next state | Notes |
-|---|---|---|---|
-| any | `02460B88#01` | `STARTING` | Begin START transaction |
-| `STARTING` | `02440B88#02/#03` | `STARTING` | Confirm startup |
-| `STARTING` | `005A1020=50.0 Hz` | `RUNNING` | Physical running milestone |
-| `RUNNING` | late `02440B88#02/#03` | `RUNNING` | Do not regress on lingering startup status |
-| `RUNNING` | `02440B88#01` | `RUNNING_SETTLED` | Stable terminal running state |
-| any | `02460B88#02` | `STOPPING` | Begin STOP transaction |
-| `STOPPING` | `02440B88#05/#04` | `STOPPING` | Confirm shutdown |
-| `STOPPING` | `005A1020=0.0 Hz` | `STOPPED` | Physical stopped milestone |
-| `STOPPED` | late `02440B88#05/#04` | `STOPPED` | Do not regress on lingering shutdown status |
-| `STOPPED` | `02440B88#00` | `OFF_IDLE` | Final idle terminal state |
+The key ownership rule is:
 
-## Analyzer outputs
+- genset `/Start` is **command state owned by Victron**;
+- physical CAN feedback never assigns `/Start` locally;
+- genset `/StatusCode` is **actual physical feedback**;
+- an externally observed Scheiber START is adopted by setting manager `/ManualStart=1`;
+- the manager's resulting `/Start=1` write is accepted but its duplicate CAN START is suppressed;
+- an externally observed STOP clears `/ManualStart` only when the manager is manually owning the run, preserving automatic conditions.
 
-`scheiber_can_analyze.py` writes `generator_state_timeline.csv` with:
+This is what allows native Victron autostart logic, manual runs, timed runs, runtime accounting, and physical feedback to coexist.
 
-- source line and timestamp;
-- CAN ID and payload;
-- decoded signal;
-- raw and engineering values;
-- state before and after;
-- transaction phase;
-- whether the event was accepted as a lifecycle transition;
-- confidence and engineering notes.
+## Timed-run validation
 
-The normal per-frame decoder also emits:
+A native Victron timed run was exercised end-to-end. During the run:
 
-- `generator_command` and `generator_command_raw`;
-- `generator_status` and `generator_status_raw`;
-- `generator_lifecycle_ac_signal` for `0x005A1020`.
+```text
+/ManualStart = 1
+/ManualStartTimer > 0 and counting down
+/RunningByCondition = 'manual'
+/RunningByConditionCode = 1
+/Runtime increasing
+com.victronenergy.genset.scheiber /Start = 1
+/StatusCode = 8
+```
+
+At timer expiry, Victron changed `/Start` to 0; the bridge transmitted exactly one `02460B88#02`; Scheiber reported `#05/#04`, then `005A1020=0.0 Hz`, and the bridge confirmed STOPPED.
+
+Current gui-v2 may display only the timer icon/elapsed runtime and no longer exposes the older live +/- duration controls. That is a UI change, not a missing bridge capability. `/ManualStartTimer` remains a writable manager path.
+
+### CLI type warning
+
+Do not write a timer as a string. With the Venus `dbus` CLI, a plain `12000` can be interpreted as a string; `%12000` is an integer variant. A string timer can crash `dbus-generator` when it decrements the value. Prefer the UI.
+
+## Manager restart recovery
+
+A `dbus-generator` restart recreates `startstop1` and can initialize the remote `/Start` to zero. Without guarding, that initialization can look like a real STOP while the physical engine is already running.
+
+Bridge v5.4.1 therefore caches manager manual/timer/condition state and, when the manager disappears while STARTING/RUNNING:
+
+1. arms a 30 s recovery guard;
+2. suppresses replacement-manager initialization `/Start=0` from CAN;
+3. restores a numeric `/ManualStartTimer` first when appropriate;
+4. restores `/ManualStart=1`;
+5. waits for the manager to synchronize `/Start=1` and suppresses the duplicate CAN command;
+6. then returns to normal command handling.
+
+This recovery path was observed working in live logs.
+
+## Post-stop `OFF_IDLE` caveat
+
+`STOPPED` at 0 Hz means the engine/frequency has stopped, but the Scheiber controller may still be settling. In live testing, `02440B88#00` arrived roughly a minute later. A START sent about 15 s after STOP, before `#00`, was transmitted but ignored. A later START from `OFF_IDLE` succeeded normally.
+
+Bridge v5.4.1 does **not** queue such an early START. The current operational rule is: after a stop, wait for `OFF_IDLE` before requesting another start. A future version can queue one Victron START until `#00` without changing the manager timer semantics.
+
+## Startup resynchronization
+
+If the bridge restarts while the generator is already running, it attempts to recover physical state instead of assuming OFF. Generator-specific nominal `005A1020` is the strongest evidence. Two high-AC samples from `00501020` are also used as a fast startup hint during a limited resync window; they are not treated as the sole steady-state generator proof.
 
 ## Safety boundary
 
-This mapping describes observed receive-side behavior. It does **not** establish a safe transmit sequence. Before any control implementation, independently validate:
+The live-tested production transmit surface is intentionally narrow:
 
-- whether commands must be repeated;
-- the purpose of adjacent `0x02160B88`, `0x02140B88`, and other companion frames;
-- acknowledgements and negative acknowledgements;
-- command timeout and watchdog behavior;
-- starter crank limits and retry policy;
-- low-voltage, fire, oil-pressure, temperature, exhaust, transfer-switch, and shore-power interlocks;
-- emergency abort and fail-safe STOP behavior;
-- behavior after CAN loss, process crash, or gateway restart.
+```text
+02460B88#01
+02460B88#02
+```
 
-The repository intentionally contains no generator transmission function.
+The bridge does not transmit source-selection requests, does not replay unresolved companion frames, and does not retry START/STOP automatically. Existing generator hardware protections remain authoritative. Live success on one installation is not an OEM protocol specification.

@@ -1,34 +1,71 @@
 # Scheiber CAN Analysis for NMEA 2000
 
-Reverse-engineering notes, evidence, tools, and a reproducible Raspberry Pi capture workflow for a Scheiber marine CAN installation observed through a DSD TECH SH-C30A (CANable-derived) USB-CAN adapter.
+Reverse-engineering notes, evidence, tools, and reproducible integration work for a Scheiber marine CAN installation observed through a DSD TECH SH-C30A (CANable/Candlelight-compatible) USB-CAN adapter.
 
-> **Project status:** engineering reverse-engineering report, not an OEM protocol specification. Every field is labelled `confirmed`, `candidate`, `guess`, or `unresolved`. The default workflow is passive/read-only.
+> **Project status:** engineering reverse-engineering project, not an OEM protocol specification. Passive analysis remains the default workflow. An optional, isolated Cerbo GX bridge under [`cerbo/`](cerbo/) implements the two generator commands that were live-validated on this installation; AC/House source-selection control remains disabled.
 
 ## What is included
 
 - A complete, hash-identified 228.962 s candump capture, stored as one `.xz` file, with 4,401 valid extended-CAN frames and 45 CAN IDs.
 - A pure-Python decoder and CSV/JSON report generator.
-- A context-aware generator lifecycle state machine.
-- A detailed engineering report in Markdown, PDF, and DOCX form; PDF/DOCX can be rebuilt with `scripts/build_report.sh`.
-- Wiring and Raspberry Pi setup instructions for the SH-C30A.
+- A context-aware passive generator lifecycle state machine.
+- A tested Victron Cerbo GX connected-genset bridge with runit installer, rollback path, D-Bus integration, tanks, batteries, and diagnostics.
+- Wiring/setup instructions for the SH-C30A on Raspberry Pi and Cerbo GX.
 - A mapping register with datatypes, endianness, scales, offsets, units, observed ranges, confidence, and proposed NMEA 2000 PGNs.
-- A validation plan for the nine batteries, three chargers, two power panels, generator, and three tanks.
-- Dry-run NMEA 2000 translation examples. No control frames are transmitted.
+- A validation plan for the batteries, chargers, source panels, generator, and tanks.
+- Dry-run NMEA 2000 translation examples.
+
+The historical analyzer and NMEA 2000 work do not transmit Scheiber control frames. The optional Cerbo bridge transmits only the live-tested generator `START`/`STOP` frame (`0x02460B88`) and explicitly does not transmit source-selector requests.
 
 ## Known installation inventory
 
 | Item | Count / capacity | Current identification status |
 |---|---:|---|
-| House batteries | 6 | Six individual CAN streams identified; physical battery 1-6 assignment pending |
-| Engine start batteries | 2 | Port and starboard physical CAN sources unresolved |
-| Generator start battery | 1 | Battery source unresolved; 25 A charger family is the best charging-system candidate |
+| House batteries | 6 | Six individual CAN streams identified; voltage and SoC semantics established, physical battery 1-6 assignment pending |
+| Engine start batteries | 2 | Two experimental streams (`0x06140580`, `0x06180580`); port/starboard identity and voltage scale still require crank validation |
+| Generator start battery | 1 | Starter voltage published from `0x00501020` bytes 0-1 LE x0.1 V |
 | Battery chargers | 3 | Device families with credible 12 V / 60 A, 12 V / 40 A, and 12 V / 25 A signatures |
-| Water tank | 600 L | 84% median, approximately 504 L |
-| Diesel tank 1 | 500 L | 63% median, approximately 315 L |
-| Diesel tank 2 | 500 L | 79%, approximately 395 L |
-| Power source panels | 2 | AC panel and House panel request/applied states decoded |
+| Water tank | 600 L | Confirmed level mapping |
+| Diesel tank 1 | 500 L | Confirmed level mapping |
+| Diesel tank 2 | 500 L | Confirmed level mapping |
+| Power source panels | 2 | AC panel and House panel request/applied states decoded; bridge uses applied state receive-only |
 
 The capacities and inventory are centrally defined in [`config/system_config.json`](config/system_config.json).
+
+## Victron Cerbo GX integration
+
+The tested bridge is documented in [`docs/CERBO_GX_INTEGRATION.md`](docs/CERBO_GX_INTEGRATION.md).
+
+It publishes:
+
+```text
+com.victronenergy.genset.scheiber
+```
+
+which Victron's normal `dbus-generator` service matches to a connected-genset manager (`com.victronenergy.generator.startstop1`). Native Victron manual starts, automatic conditions, timed runs, runtime accounting, and stop commands therefore remain manager-owned rather than being reimplemented in the bridge.
+
+Bridge version currently committed here:
+
+```text
+5.4.1
+repository SHA-256 c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3
+field-tested source SHA-256 b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1
+```
+
+The repository copy changes comments/docstrings only; runtime statements are identical to the field-tested v5.4.1 source.
+
+Quick installation after merge:
+
+```bash
+mkdir -p /data/scheiber-gx-installer
+cd /data/scheiber-gx-installer
+wget -O install.sh \
+  https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo/install.sh
+chmod +x install.sh
+CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
+```
+
+See the integration guide before starting the service, especially the explicit system-battery selection requirement and the post-stop `OFF_IDLE` restart caveat.
 
 ## Key findings
 
@@ -44,7 +81,9 @@ CAN ID `0x02040580` is four big-endian unsigned 16-bit words:
             +-------------- water    = 0x0054 = 84%
 ```
 
-### Source selectors — confirmed
+The Cerbo bridge publishes these as native Victron tank services with configured capacities of 600 L / 500 L / 500 L.
+
+### Source selectors — confirmed, receive-only in bridge
 
 The source enum is:
 
@@ -61,49 +100,58 @@ Request and applied-state frames are distinct:
 
 Transfers from shore to generator include an applied intermediate OFF state, consistent with break-before-make behavior.
 
-## Generator lifecycle — confirmed receive-side sequence
+The Cerbo bridge only consumes the **applied** IDs and associated panel-voltage telemetry. It never transmits `0x02420B90` or `0x02420B88`.
+
+## Generator lifecycle and control
 
 The generator is represented by three complementary signal families:
 
 | CAN ID | Datatype | Scale / enum | Role |
 |---|---|---|---|
-| `0x02460B88` | `uint8 enum` | `01=START`, `02=STOP` | External command / transaction trigger |
+| `0x02460B88` | `uint8 enum` | `01=START`, `02=STOP` | External command / transaction trigger; live-tested transmit |
 | `0x02440B88` | `uint8 enum` | `00=OFF_IDLE`, `01=RUNNING_SETTLED`, `02/03=STARTING`, `04/05=STOPPING` | Generator lifecycle/status confirmation |
-| `0x005A1020` bytes 0-1 | `uint16 little-endian` | x0.1 Hz | Physical AC-frequency milestone |
+| `0x005A1020` bytes 0-1 | `uint16 little-endian` | x0.1 Hz | Generator-specific AC-frequency milestone |
 
-### External START
+### START
 
 ```text
 02460B88#01                 -> STARTING
 02440B88#02 or #03          -> STARTING confirmed
-005A1020 first word = 500   -> 50.0 Hz -> RUNNING
+005A1020 ~= 50.0 Hz         -> RUNNING after confirmation hold
 02440B88#01                 -> RUNNING_SETTLED
 ```
 
-### External STOP
+### STOP
 
 ```text
 02460B88#02                 -> STOPPING
 02440B88#05 or #04          -> STOPPING confirmed
-005A1020 first word = 0     -> 0.0 Hz -> STOPPED
+005A1020 = 0.0 Hz           -> STOPPED
 02440B88#00                 -> OFF_IDLE
 ```
 
-The baseline capture contains START, STARTING confirmation, 50 Hz, RUNNING_SETTLED, STOP, STOPPING confirmation, frequency decay, and 0 Hz. It does **not** contain `02440B88#00`; `OFF_IDLE` was confirmed in later work and is documented as follow-on evidence.
+The baseline capture contains START, STARTING confirmation, 50 Hz, RUNNING_SETTLED, STOP, STOPPING confirmation, frequency decay, and 0 Hz. It does **not** contain `02440B88#00`; `OFF_IDLE` was confirmed in later live work.
 
-### Why frequency is context-gated
+### Live generator-command validation
 
-`0x005A1020` also changes when the associated AC path is switched between generator, OFF, and shore. Therefore:
+The exact one-byte commands were successfully transmitted on the installation:
 
-- 50 Hz promotes the lifecycle to `RUNNING` only while a START transaction is active.
-- 0 Hz promotes the lifecycle to `STOPPED` only while a STOP transaction is active.
-- Outside those contexts, the decoder records AC present/absent but does not infer engine state.
+```bash
+cansend can2 02460B88#01   # START
+cansend can2 02460B88#02   # STOP
+```
 
-This prevents panel source switching from generating false generator starts or stops. See [`docs/GENERATOR_LIFECYCLE.md`](docs/GENERATOR_LIFECYCLE.md).
+The production bridge sends those commands only in response to the Victron connected-genset `/Start` command (or observes/adopts an externally generated Scheiber command). It sends no automatic CAN retry.
 
-The repository remains receive-only. The lifecycle mapping is not a safe transmission recipe; command repetition, companion frames, acknowledgements, interlocks, abort handling, timeouts, and fail-safe behavior remain unvalidated.
+A key live finding is that `STOPPED` and `OFF_IDLE` are not equivalent for immediate restart. The engine can reach 0 Hz quickly while the Scheiber controller takes roughly another minute to emit `02440B88#00`. A START sent in that settling interval was ignored; a START sent after `OFF_IDLE` worked. Bridge v5.4.1 documents this but does not yet queue an early start.
 
-### Six house-battery candidates
+See [`docs/GENERATOR_LIFECYCLE.md`](docs/GENERATOR_LIFECYCLE.md) and [`docs/CERBO_GX_INTEGRATION.md`](docs/CERBO_GX_INTEGRATION.md).
+
+### Why generator frequency is no longer treated as shared AC
+
+Live testing separated the generator-specific `0x005A1020` signal from the shared `0x02040898` AC telemetry. With the generator off and shore power present, `0x005A1020` stayed at 0 Hz while `0x02040898` still reported approximately 235 V / 50 Hz. The Cerbo bridge therefore uses `0x005A1020` as generator-specific frequency and treats `0x02040898` as shared/fallback AC telemetry only.
+
+### Six house batteries
 
 The six IDs are:
 
@@ -112,13 +160,15 @@ The six IDs are:
 0x060E0580  0x06120580  0x06160580
 ```
 
-Each six-byte payload is provisionally decoded as:
+Each six-byte payload is decoded as:
 
 | Bytes | Type | Interpretation |
 |---|---|---|
-| 0-1 | `uint16` little-endian, x0.01 | Voltage in volts — high confidence |
-| 2-3 | offset `uint16` little-endian, raw - `0x4E00` | Signed charge/discharge code — sign high confidence; x0.1 A is a working guess |
-| 4-5 | `uint16` little-endian | 72-74; SoC percent is the primary guess, temperature in degF remains possible |
+| 0-1 | `uint16` little-endian, x0.01 | Voltage in volts — confirmed |
+| 2-3 | offset `uint16` little-endian, raw - `0x4E00` | Signed current code — zero/sign strong; x0.1 A remains a working scale candidate |
+| 4-5 | `uint16` little-endian | SoC percent for this installation — confirmed by follow-on validation |
+
+The older temperature alternative is no longer used by the bridge. Physical battery 1-6 ordering still needs direct validation.
 
 ### Three charger families
 
@@ -128,7 +178,7 @@ The repeated device suffixes `0x1008`, `0x1010`, and `0x1020` each have heartbea
 |---|---|---|---|
 | `0x1008` | `0C 3C` | 12 V / 60 A | House/engine charging candidate |
 | `0x1010` | `0C 28` | 12 V / 40 A | House/engine charging candidate |
-| `0x1020` | `0C 19` | 12 V / 25 A | Best generator-start charger candidate |
+| `0x1020` | `0C 19` | 12 V / 25 A | Generator-start charging family |
 
 For `0x005010xx`, four little-endian `uint16` values plausibly decode as DC voltage x0.1 V, DC current x0.1 A, AC input voltage x0.1 V, and `0xFFFF` unavailable. Example:
 
@@ -138,7 +188,7 @@ For `0x005010xx`, four little-endian `uint16` values plausibly decode as DC volt
          13.5V 20.9A 236.0V   NA  (candidate engineering units)
 ```
 
-For `0x005A10xx`, the first little-endian word is a strong AC-frequency field: `0x01F4 = 500 -> 50.0 Hz`, `0x0190 = 400 -> 40.0 Hz`, and zero when off.
+For `0x005A10xx`, the first little-endian word is an AC-frequency field: `0x01F4 = 500 -> 50.0 Hz`, `0x0190 = 400 -> 40.0 Hz`, and zero when off.
 
 ## Analyze a capture
 
@@ -166,15 +216,19 @@ The live monitor also prints context-aware lifecycle transitions:
 python3 scripts/live_monitor.py --channel can1
 ```
 
+These analysis scripts remain passive/read-only.
+
 ## Engineering report
 
-The source report is [`docs/ENGINEERING_REPORT.md`](docs/ENGINEERING_REPORT.md). Rebuild the human-friendly PDF and DOCX with:
+The source report is [`docs/ENGINEERING_REPORT.md`](docs/ENGINEERING_REPORT.md). It documents the original hash-identified capture and analysis baseline. Live control validation and the production Cerbo integration are maintained separately in the focused integration/lifecycle documents so the evidence provenance of the original report remains clear.
+
+Rebuild the human-friendly PDF and DOCX with:
 
 ```bash
 ./scripts/build_report.sh
 ```
 
-## Reproduce the capture
+## Reproduce a passive capture
 
 ### 1. Wire the Scheiber six-pin connector to the SH-C30A
 
@@ -244,20 +298,21 @@ Scheiber CAN and NMEA 2000 are separate protocols. Do not join the wires as one 
 Use two independent CAN interfaces:
 
 ```text
-Scheiber bus <-> CAN interface A <-> Raspberry Pi gateway <-> CAN interface B <-> NMEA 2000 / VE.Can
+Scheiber bus <-> CAN interface A <-> gateway <-> CAN interface B <-> NMEA 2000 / VE.Can
 ```
 
-The proposed translation is documented in [`docs/NMEA2000_MAPPING.md`](docs/NMEA2000_MAPPING.md). The initial implementation should be read-only on Scheiber and dry-run/log-only on the NMEA side. Source-selection and generator control must remain disabled until safety interlocks and acknowledgements are independently validated.
+The proposed translation is documented in [`docs/NMEA2000_MAPPING.md`](docs/NMEA2000_MAPPING.md). The initial NMEA implementation should remain read-only on Scheiber and dry-run/log-only on the NMEA side. The live-tested Cerbo generator bridge is a separate integration path and does not imply that source-selection control or arbitrary Scheiber frame replay is safe.
 
 ## Repository layout
 
 ```text
+cerbo/                  tested Victron connected-genset bridge and installer
 config/                 capacities, inventory, mappings
 data/raw/               original candump capture (single .xz file)
 data/examples/          selected evidence frames
 data/derived/           generated CSV/JSON results
-scripts/                analyzer, lifecycle tracker, and helper tools
-docs/                   engineering report and handoff documentation
+scripts/                passive analyzer, lifecycle tracker, and helper tools
+docs/                   engineering, mapping, integration, and handoff docs
 tests/                  decoder and lifecycle regression tests
 ```
 
@@ -266,10 +321,15 @@ tests/                  decoder and lifecycle regression tests
 - DSD TECH SH-C30A official product page: https://www.deshide.com/product-details_SH-C30A.html
 - CANable: https://www.canable.io/
 - Linux CAN utilities: https://github.com/linux-can/can-utils
+- Victron Venus OS: https://github.com/victronenergy/venus
+- Victron dbus-generator: https://github.com/victronenergy/dbus_generator
+- Victron gui-v2: https://github.com/victronenergy/gui-v2
 - Victron VE.Can pinout documentation: https://www.victronenergy.com/media/pg/Venus_GX/en/connecting-supported-non-victron-products.html
 - Scheiber CAN/NMEA gateway: https://www.scheiber.com/can-nmea?lang=en
 - canboat NMEA 2000 PGN database: https://canboat.github.io/canboat/canboat.html
 
 ## License and disclaimer
 
-Code and original documentation in this repository are provided under the MIT License. The CAN capture remains experimental data from the user's installation. This project is not affiliated with or endorsed by Scheiber, Victron Energy, DSD TECH, or the NMEA organization. Generator and AC source control can create hazardous conditions; use qualified marine-electrical practices and begin with passive monitoring only.
+Code and original documentation in this repository are provided under the MIT License. The CAN capture remains experimental data from one installation. This project is not affiliated with or endorsed by Scheiber, Victron Energy, DSD TECH, or the NMEA organization.
+
+Generator and AC source control can create hazardous conditions. Only `0x02460B88#01/#02` has been live-validated for active use in the Cerbo bridge described here. Do not infer that other observed request/control frames are safe to transmit.

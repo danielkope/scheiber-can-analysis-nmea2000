@@ -1,10 +1,10 @@
 {
   "project": {
     "name": "Scheiber CAN Analysis for NMEA 2000",
-    "report_version": "1.0",
+    "report_version": "1.2",
     "capture_interface": "can1",
     "scheiber_bitrate_bps": 250000,
-    "capture_mode": "passive read-only"
+    "capture_mode": "passive read-only; optional active Victron bridge isolated under cerbo/"
   },
   "tanks": {
     "water_l": 600.0,
@@ -18,14 +18,19 @@
       "starboard": 1
     },
     "generator_start_batteries": 1,
-    "total_batteries": 9
+    "total_batteries": 9,
+    "house_soc_field": "bytes 4-5 uint16 little-endian x1 percent; confirmed for this installation",
+    "engine_candidate_ids": [
+      "0x06140580",
+      "0x06180580"
+    ]
   },
   "charger_inventory": {
     "total_chargers": 3,
     "candidate_nodes": {
       "0x1008": "12 V / 60 A signature; likely house/engine charging",
       "0x1010": "12 V / 40 A signature; likely house/engine charging",
-      "0x1020": "12 V / 25 A signature; best candidate for generator-start charger"
+      "0x1020": "12 V / 25 A signature; generator-start charging family; 0x00501020 provides starter-voltage telemetry"
     }
   },
   "generator_control": {
@@ -35,7 +40,17 @@
       "0x01": "START",
       "0x02": "STOP"
     },
-    "semantic_status": "confirmed by operator and present in capture",
-    "transmit_status": "disabled; timing, acknowledgement, interlocks, retries, and fail-safe behavior unvalidated"
+    "semantic_status": "confirmed in passive capture and follow-on live testing",
+    "transmit_status": "live-tested on this installation; cerbo bridge sends one command per accepted Victron transition and no automatic retries",
+    "source_selector_control": "disabled; 0x02420B90 and 0x02420B88 are not transmitted",
+    "restart_caveat": "after 0 Hz STOPPED, wait for 0x02440B88#00 OFF_IDLE before requesting another START on bridge v5.4.1"
+  },
+  "cerbo_bridge": {
+    "version": "5.4.1",
+    "sha256": "c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3",
+    "field_tested_source_sha256": "b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1",
+    "default_can_interface": "can2",
+    "service": "com.victronenergy.genset.scheiber",
+    "victron_manager": "com.victronenergy.generator.startstop1"
   }
 }
