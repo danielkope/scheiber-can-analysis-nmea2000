@@ -4,17 +4,17 @@ This directory contains the optional active Victron integration. The passive ana
 
 ## Reconstructing the reviewed source
 
-The field-tested v5.4.1 Python source is stored as two base64 payload chunks:
+The field-tested v5.4.1 Python source is stored as two **independently base64-encoded** payload chunks:
 
 ```text
 source/bridge.py.part1
 source/bridge.py.part2
 ```
 
-The immutable reviewed payload SHA-256 is:
+Decode each chunk independently and concatenate the decoded bytes. The SHA-256 of that immutable decoded repository payload is:
 
 ```text
-c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3
+d66c194a4753497dc6f6270e04cf615acc76ef3868efc8ffe522ea992725c208
 ```
 
 `assemble_bridge.py` verifies that payload and then applies small, explicit post-validation corrections before installation. The first such correction fixes Victron tank units: configured vessel capacities remain human-readable litres, while D-Bus `/Capacity` and `/Remaining` are published in cubic metres as required by Victron/Signal K.
