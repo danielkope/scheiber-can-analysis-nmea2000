@@ -2,39 +2,33 @@
 
 This directory contains the optional active Victron integration. The passive analyzer elsewhere in the repository remains read-only.
 
-## Reconstructing the reviewed source
+## Canonical source
 
-The field-tested v5.4.1 Python source is stored as two **independently base64-encoded** payload chunks:
-
-```text
-source/bridge.py.part1
-source/bridge.py.part2
-```
-
-Decode each chunk independently and concatenate the decoded bytes. The SHA-256 of that immutable decoded repository payload is:
+The complete production bridge is checked in directly as:
 
 ```text
-d66c194a4753497dc6f6270e04cf615acc76ef3868efc8ffe522ea992725c208
+cerbo/bridge.py
 ```
 
-`assemble_bridge.py` verifies that payload and then applies small, explicit post-validation corrections before installation. The first such correction fixes Victron tank units: configured vessel capacities remain human-readable litres, while D-Bus `/Capacity` and `/Remaining` are published in cubic metres as required by Victron/Signal K.
+There is no generated or encoded runtime source and no install-time patching. Review `bridge.py` directly; the installer copies that exact file to the Cerbo after compiling it and verifying its SHA-256.
 
-Reconstruct the installable bridge in any checkout with:
+Current bridge version:
 
-```bash
-cd cerbo
-python3 assemble_bridge.py -o bridge.py
-python3 -m py_compile bridge.py
-sha256sum bridge.py
+```text
+5.4.2
 ```
 
-The assembler prints both the immutable source-payload SHA and the final installed-file SHA. It fails closed if the expected tank-unit patch sites are not found exactly once.
+Current `cerbo/bridge.py` SHA-256:
 
-The earlier pre-documentation-reconciliation field-tested v5.4.1 file had SHA-256 `b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1`. Generator/CAN control semantics remain unchanged by the tank-unit correction.
+```text
+6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+```
+
+Bridge 5.4.2 is the field-tested 5.4.1 generator integration with the tank D-Bus unit correction applied directly in the source. Generator START/STOP CAN semantics and manager-recovery behavior are unchanged.
 
 ## Tank D-Bus units
 
-Vessel capacities are configured as:
+Vessel capacities remain configured in litres for readability:
 
 ```text
 Fresh water:   600 L
@@ -42,15 +36,15 @@ Diesel tank 1: 500 L
 Diesel tank 2: 500 L
 ```
 
-Victron D-Bus and Signal K expect volume in cubic metres, so the installed bridge publishes:
+Victron D-Bus uses cubic metres for `/Capacity` and `/Remaining`, so `bridge.py` publishes:
 
 ```text
-/Capacity   0.600, 0.500, 0.500 m3
-/Remaining  capacity_m3 * level_percent / 100
-/Level      percent
+Fresh water capacity:   0.600 m3
+Diesel tank 1 capacity: 0.500 m3
+Diesel tank 2 capacity: 0.500 m3
 ```
 
-For example, fresh water at 74% is `/Capacity=0.600` and `/Remaining=0.444`.
+`/Remaining` is calculated from the cubic-metre capacity and `/Level` percentage. The D-Bus text formatter still presents the volume in litres for a human-readable GX display.
 
 ## Install on a Cerbo GX
 
@@ -59,12 +53,13 @@ As root, after the PR is merged:
 ```bash
 mkdir -p /data/scheiber-gx-installer
 cd /data/scheiber-gx-installer
-wget -O install.sh https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo/install.sh
+wget -O install.sh \
+  https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo/install.sh
 chmod +x install.sh
 CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
 ```
 
-To test the open fix branch before merge, point both the downloaded installer and `RAW_BASE` at the branch:
+To test the open branch before merge:
 
 ```bash
 BRANCH=fix/tank-dbus-units
@@ -74,9 +69,11 @@ chmod +x install.sh
 RAW_BASE="$BASE" CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
 ```
 
-`install.sh` downloads the two payload chunks and `assemble_bridge.py`, verifies and patches the source, compiles it, installs the runit wrapper, persists the `/service/scheiber-gx` link through `/data/rc.local`, and starts the service with `svc`.
+The installer downloads the complete `bridge.py`, compiles it, verifies its SHA-256, backs up the currently installed script as `/data/scheiber-gx/bridge.py.previous`, installs the runit wrapper, persists the `/service/scheiber-gx` link through `/data/rc.local`, and restarts the service with `svc`.
 
-After restart, verify the corrected tank units:
+A failed download, compile, or checksum occurs before the installed bridge is replaced.
+
+## Verify the corrected tank units
 
 ```bash
 for s in \
@@ -85,11 +82,19 @@ for s in \
   com.victronenergy.tank.scheiber_diesel2
 do
   echo "===== $s ====="
-  for p in Level Capacity Remaining; do
+  for p in Level Capacity Remaining FluidType CustomName; do
     printf '%-12s ' "$p:"
     dbus -y "$s" "/$p" GetValue
   done
 done
 ```
 
-Read [`../docs/CERBO_GX_INTEGRATION.md`](../docs/CERBO_GX_INTEGRATION.md) before installation. It covers wiring, explicit SmartShunt/system-battery selection, D-Bus checks, timed-run validation, rollback, and the current post-stop `OFF_IDLE` restart caveat.
+For levels of 74%, 62%, and 79%, the corresponding volume values should be approximately:
+
+```text
+Fresh:    Capacity 0.600  Remaining 0.444
+Diesel 1: Capacity 0.500  Remaining 0.310
+Diesel 2: Capacity 0.500  Remaining 0.395
+```
+
+Read [`../docs/CERBO_GX_INTEGRATION.md`](../docs/CERBO_GX_INTEGRATION.md) for wiring, D-Bus architecture, generator lifecycle, diagnostics, rollback, and the post-stop `OFF_IDLE` restart caveat.
