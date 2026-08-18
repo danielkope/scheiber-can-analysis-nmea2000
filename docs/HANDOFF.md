@@ -39,7 +39,7 @@ field-tested v5.4.1 source SHA-256 b7acb294467147a50166ac1468fe64de37c8a0facca92
 
 Version 5.4.2 keeps the field-tested v5.4.1 generator/CAN behavior and fixes the tank D-Bus volume unit. The repository now stores the complete production Python source directly; there is no encoded source, assembler, or install-time source patching.
 
-Installation and debugging are in `docs/CERBO_GX_INTEGRATION.md`; the installer is `cerbo/install.sh`.
+Installation and debugging are in `docs/CERBO_GX_INTEGRATION.md`; the installer is `cerbo/install.sh`. Fresh installation and update both use that same direct-from-repository installer.
 
 ## Proven generator control
 
@@ -93,6 +93,38 @@ Published native Victron tank services use the Victron D-Bus volume unit:
 
 Therefore the configured capacities are published as `0.600`, `0.500`, and `0.500 m3`. The service text formatter presents those values as litres for the GX UI. This unit correction is the runtime change from bridge v5.4.1 to v5.4.2.
 
+### Signal K / NMEA 2000 tanks
+
+The tank path is now live, not merely proposed.
+
+Venus-derived Signal K sources:
+
+```text
+tanks.freshWater.90
+tanks.fuel.91
+tanks.fuel.92
+```
+
+Current `signalk-to-nmea2000` mappings:
+
+```text
+tanks.freshWater.90 -> PGN 127505 instance 6 Water
+tanks.fuel.91       -> PGN 127505 instance 7 Fuel
+tanks.fuel.92       -> PGN 127505 instance 8 Fuel
+```
+
+Observed loopback from the Cerbo VE.Can/NMEA 2000 connection:
+
+```text
+tanks.freshWater.6  source n2k-on-ve.can-socket.209 (127505)
+tanks.fuel.7        source n2k-on-ve.can-socket.210 (127505)
+tanks.fuel.8        source n2k-on-ve.can-socket.211 (127505)
+```
+
+The looped-back values matched the Venus values. The `209/210/211` values are NMEA source addresses, not tank instances, and should not be treated as stable configuration identifiers.
+
+B&G Zeus3 published specifications include PGN 127505 as a receive PGN, so the standard on-bus representation is compatible with the plotter. See `docs/SIGNALK_NMEA2000.md` for display/source setup guidance and troubleshooting.
+
 ### House batteries
 
 Six IDs:
@@ -115,6 +147,8 @@ Keep the existing SmartShunt explicitly selected as the GX system battery. The b
 
 `00501020` bytes 0-1 LE x0.1 V is published as starter voltage. Charger current and AC input are diagnostic/candidate fields.
 
+This is the recommended next NMEA 2000 battery value, using PGN 127508 with a deliberate unused battery instance.
+
 ### Source panels
 
 Applied source: `02400B90` AC and `02400B88` House; enum `01 OFF / 02 SHORE / 04 GENERATOR`. Panel voltage is bytes 4-5 BE of `02040B90` / `02040B88`.
@@ -128,7 +162,7 @@ Request IDs `02420B90` / `02420B88` are documented but not transmitted by the br
 3. Labelled HVAC/air-conditioning CAN capture now that the units can be operated one at a time.
 4. Engine A/B physical identity and scale validation.
 5. Physical house-battery 1-6 ordering.
-6. Signal K / NMEA 2000 publication of validated telemetry, beginning with PGN 127505 tank levels after tank-unit verification.
+6. Additional NMEA 2000 telemetry, starting with generator-starter voltage. Do not publish candidate house current or experimental engine-battery data as authoritative values.
 
 ## Service/debug commands
 
