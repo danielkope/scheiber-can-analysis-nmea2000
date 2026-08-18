@@ -2,6 +2,8 @@
 
 This engineering report is split into review-friendly Markdown sections. The build script concatenates them in filename order to generate the complete PDF and DOCX report.
 
+> **Evidence scope:** the generated report is intentionally anchored to the original hash-identified passive capture. Follow-on live control validation and the current Victron Cerbo GX production integration are documented separately in [`GENERATOR_LIFECYCLE.md`](GENERATOR_LIFECYCLE.md) and [`CERBO_GX_INTEGRATION.md`](CERBO_GX_INTEGRATION.md). This keeps the historical evidence package reproducible while preventing newer field results from drifting out of the repository.
+
 ## Sections
 
 - [Document control and evidence provenance](report/00_document_control_and_evidence_provenance.md)
@@ -29,9 +31,13 @@ This engineering report is split into review-friendly Markdown sections. The bui
 - [Appendix B. Selected raw evidence examples](report/22_appendix_b_selected_raw_evidence_examples.md)
 - [Appendix C. References and external technical sources](report/23_appendix_c_references_and_external_technical_sources.md)
 
-A focused, implementation-oriented version of the generator state machine is also available at [`GENERATOR_LIFECYCLE.md`](GENERATOR_LIFECYCLE.md).
+## Current live addenda
 
-## Build the complete report
+- [`GENERATOR_LIFECYCLE.md`](GENERATOR_LIFECYCLE.md): passive lifecycle model plus follow-on live START/STOP, OFF_IDLE, and Victron state-management findings.
+- [`CERBO_GX_INTEGRATION.md`](CERBO_GX_INTEGRATION.md): tested bridge version, installation, D-Bus architecture, mappings, diagnostics, limitations, and rollback.
+- [`MAPPING_TABLE.md`](MAPPING_TABLE.md): current consolidated mapping register, including fields confirmed after the original report was generated.
+
+## Build the baseline report
 
 ```bash
 ./scripts/build_report.sh

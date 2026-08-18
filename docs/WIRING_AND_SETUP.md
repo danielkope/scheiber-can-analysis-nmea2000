@@ -1,6 +1,6 @@
-# Wiring and Raspberry Pi setup
+# Wiring and SocketCAN setup
 
-## Scheiber six-pin to SH-C30A
+## Scheiber six-pin to DSD TECH SH-C30A
 
 ```text
 SCHEIBER 6-pin                    DSD TECH SH-C30A
@@ -8,54 +8,30 @@ SCHEIBER 6-pin                    DSD TECH SH-C30A
 Pin 5  CAN-H  ------------------  CAN_H
 Pin 6  CAN-L  ------------------  CAN_L
 Pin 2  GND    ------------------  GND
-(or Scheiber pin 3, depending on the installed harness)
+(or installation-specific pin 3)
 
-Pin 1  Recovery  X                not connected
-Pin 4  +12 V     X                NOT connected
+Pin 1  Recovery  X                leave open
+Pin 4  +12 V     X                NEVER connect to SH-C30A
 ```
 
-The user-provided ground note is preserved because some harness variants may expose the reference on pin 2 or pin 3. Verify against the actual connector/harness before energizing.
+The SH-C30A is USB-powered.
 
-## Scheiber six-pin to Cerbo GX VE.Can RJ45
+## Termination
 
-```text
-SCHEIBER 6-pin                    CERBO GX VE.Can RJ45
+For a passive tap into an existing correctly terminated Scheiber bus, leave the SH-C30A 120-ohm termination OFF. With the installation powered down, CAN-H to CAN-L should normally measure about 60 ohms when two 120-ohm end terminators are present.
 
-Pin 5  CAN-H  ------------------  Pin 7  CAN-H
-Pin 6  CAN-L  ------------------  Pin 8  CAN-L
-Pin 2  GND    ------------------  Pin 3  GND / NET-C
-(or Scheiber pin 3)
+Approximate diagnosis:
 
-Pin 1  Recovery  X                not connected
-Pin 4  +12 V     X                NOT connected
-```
-
-This pinout is electrically useful for a CAN transceiver connection, but a direct wire does **not** translate the proprietary Scheiber protocol into NMEA 2000. Use a protocol gateway and separate bus segments.
-
-## SH-C30A switch guidance
-
-The official SH-C30A description identifies a built-in 120-ohm termination switch and a programming switch. Use:
-
-- **Programming switch:** normal run/Candlelight firmware position.
-- **Termination:** OFF for a middle-of-bus passive tap into a correctly terminated network.
-- **Termination:** ON only when the SH-C30A is located at a physical end and replaces a missing 120-ohm terminator.
-
-Do not assume a physical left/right switch direction across board revisions. Confirm with markings or by measuring CAN-H to CAN-L with power removed.
-
-## Resistance and voltage checks
-
-With the entire CAN installation powered off:
-
-| CAN-H to CAN-L resistance | Likely condition |
+| H-L resistance | Likely condition |
 |---:|---|
-| about 60 ohms | two correct 120-ohm end terminators |
-| about 120 ohms | one terminator missing |
-| about 40 ohms | likely three terminators, including an unnecessary adapter terminator |
-| near 0 ohms | short circuit or incorrect measurement point |
+| ~60 ohms | normal two-end termination |
+| ~120 ohms | one terminator missing |
+| ~40 ohms | likely third terminator added |
+| near 0 | short / incorrect wiring |
 
-Powered-bus voltage checks are diagnostic only. Classical high-speed CAN is commonly near 2.5 V on both lines while recessive; during dominant bits CAN-H rises and CAN-L falls. Use an oscilloscope for definitive signal-integrity checks.
+Do not assume a physical switch direction across SH-C30A board revisions; use its markings and the resistance measurement.
 
-## SocketCAN commands
+## Raspberry Pi / Linux passive capture
 
 ```bash
 sudo apt update
@@ -71,32 +47,39 @@ sudo ip link set can1 up
 ip -details -statistics link show can1
 ```
 
-A Candlelight/gs_usb adapter should normally appear as a native SocketCAN interface. Check the actual name (`can0`, `can1`, and so on).
+The interface may be `can0`, `can1`, etc.
 
-## Passive capture
+Capture:
 
 ```bash
 candump can1
 candump -L can1 > scheiber_$(date +%Y%m%d_%H%M%S).log
-```
-
-Recommended experiment discipline:
-
-1. Start the logfile and verbally or electronically note the exact start time.
-2. Leave all systems unchanged for at least 30 seconds.
-3. Change only one physical state.
-4. Wait for the network and meters to settle.
-5. Record the action and exact timestamp.
-6. Return to baseline before the next test.
-7. Stop the capture and calculate a SHA-256 hash.
-
-```bash
 sha256sum scheiber_*.log
 ```
+
+During reverse engineering, change one physical condition at a time and record exact action timestamps.
+
+## Cerbo GX
+
+The tested production integration uses the same SH-C30A as a USB SocketCAN adapter. On the tested Cerbo it enumerated as `can2` with the kernel `gs_usb` driver.
+
+Basic inspection:
+
+```bash
+lsusb
+lsmod | grep -E 'gs_usb|can'
+ip -details link show
+```
+
+The runit wrapper in `cerbo/service/run` configures the selected interface for 250 kbit/s and brings it up. Installation is documented in `CERBO_GX_INTEGRATION.md`.
+
+Do not wire the proprietary Scheiber bus directly to the Cerbo VE.Can/NMEA 2000 bus as though the protocols were interchangeable. The Cerbo integration described here terminates Scheiber CAN at the USB adapter and translates selected data/control through software and D-Bus.
 
 ## Troubleshooting
 
 ### No CAN interface
+
+On Raspberry Pi:
 
 ```bash
 lsusb
@@ -106,21 +89,29 @@ sudo modprobe can_raw
 sudo modprobe gs_usb
 ```
 
+On Venus OS the same modules may already be present; `modprobe` is attempted by the runit wrapper.
+
 ### Interface exists but no traffic
 
-- Confirm 250,000 bit/s.
-- Confirm CAN-H and CAN-L have not been swapped.
-- Confirm the CAN reference ground.
-- Confirm the vessel network is awake.
-- Confirm the adapter is not in boot/programming mode.
+- confirm 250,000 bit/s;
+- confirm CAN-H/CAN-L polarity;
+- confirm common ground;
+- confirm the Scheiber network is awake;
+- confirm adapter is not in firmware-programming mode;
+- confirm termination has not been accidentally added at a mid-bus tap.
 
 ### Error counters or bus-off
 
-- Stop and disconnect the adapter.
-- Check for a third termination resistor.
-- Check polarity, common ground, shorts, and loose conductors.
-- Reconnect in passive mode only.
+Stop/disconnect the adapter and correct wiring/termination before continuing. Check:
 
-### Safety
+```bash
+ip -details -statistics link show can2
+```
 
-Do not use `cansend` on a live vessel control bus during discovery. Generator and shore-power commands can bypass expected user-interface safeguards if replayed incorrectly.
+for increasing RX/TX errors, drops, or bus-off.
+
+## Safety boundary
+
+Passive discovery should remain read-only. The optional `cerbo/` integration is different: it contains two generator command payloads that were explicitly live-tested on this installation (`02460B88#01` START and `#02` STOP). That validation does not authorize arbitrary replay of other Scheiber frames.
+
+The Cerbo bridge deliberately does not transmit AC/House source-selector requests, unresolved companion frames, or automatic START/STOP retries. Preserve the vessel's generator interlocks and existing safety systems.

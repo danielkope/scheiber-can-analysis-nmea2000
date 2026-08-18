@@ -1,0 +1,41 @@
+#!/bin/sh
+# runit entrypoint for the Scheiber <-> Victron bridge on Venus OS.
+exec 2>&1
+
+APP_DIR="${APP_DIR:-/data/scheiber-gx}"
+BRIDGE="${BRIDGE:-$APP_DIR/bridge.py}"
+
+saved_can_if=""
+saved_bitrate=""
+[ -r "$APP_DIR/CAN_INTERFACE" ] && saved_can_if="$(cat "$APP_DIR/CAN_INTERFACE")"
+[ -r "$APP_DIR/CAN_BITRATE" ] && saved_bitrate="$(cat "$APP_DIR/CAN_BITRATE")"
+CAN_IF="${CAN_IF:-${saved_can_if:-can2}}"
+CAN_BITRATE="${CAN_BITRATE:-${saved_bitrate:-250000}}"
+
+modprobe can 2>/dev/null || true
+modprobe can_raw 2>/dev/null || true
+modprobe gs_usb 2>/dev/null || true
+
+if ! ip link show "$CAN_IF" >/dev/null 2>&1; then
+    echo "scheiber-gx: CAN interface $CAN_IF does not exist; retrying via runit"
+    sleep 2
+    exit 1
+fi
+
+if ! ip -details link show "$CAN_IF" 2>/dev/null | grep -q "bitrate $CAN_BITRATE"; then
+    ip link set "$CAN_IF" down 2>/dev/null || true
+    if ! ip link set "$CAN_IF" type can bitrate "$CAN_BITRATE" restart-ms 100; then
+        echo "scheiber-gx: failed to configure $CAN_IF at $CAN_BITRATE bit/s"
+        sleep 2
+        exit 1
+    fi
+fi
+
+if ! ip link set "$CAN_IF" up; then
+    echo "scheiber-gx: failed to bring $CAN_IF up"
+    sleep 2
+    exit 1
+fi
+
+export CAN_IF
+exec python3 "$BRIDGE"
