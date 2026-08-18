@@ -44,15 +44,16 @@ com.victronenergy.genset.scheiber
 
 which Victron's normal `dbus-generator` service matches to a connected-genset manager (`com.victronenergy.generator.startstop1`). Native Victron manual starts, automatic conditions, timed runs, runtime accounting, and stop commands therefore remain manager-owned rather than being reimplemented in the bridge.
 
-Bridge version currently committed here:
+The complete canonical runtime source is checked in directly as [`cerbo/bridge.py`](cerbo/bridge.py). It is not generated or patched during installation.
+
+Current bridge:
 
 ```text
-5.4.1
-repository SHA-256 c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3
-field-tested source SHA-256 b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1
+version 5.4.2
+SHA-256 6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
 ```
 
-The repository copy changes comments/docstrings only; runtime statements are identical to the field-tested v5.4.1 source.
+Version 5.4.2 preserves the field-tested v5.4.1 generator/CAN behavior and corrects the Victron tank-volume D-Bus units. The v5.4.1 field-tested source SHA-256 is retained in `config/system_config.json` for provenance.
 
 Quick installation after merge:
 
@@ -65,7 +66,7 @@ chmod +x install.sh
 CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
 ```
 
-See the integration guide before starting the service, especially the explicit system-battery selection requirement and the post-stop `OFF_IDLE` restart caveat.
+The installer downloads the complete `bridge.py`, compiles it, verifies the pinned SHA-256, backs up the previous installed script, and then restarts the runit service. See the integration guide before starting the service, especially the explicit system-battery selection requirement and the post-stop `OFF_IDLE` restart caveat.
 
 ## Key findings
 
@@ -81,7 +82,7 @@ CAN ID `0x02040580` is four big-endian unsigned 16-bit words:
             +-------------- water    = 0x0054 = 84%
 ```
 
-The Cerbo bridge publishes these as native Victron tank services with configured capacities of 600 L / 500 L / 500 L.
+The Cerbo bridge publishes these as native Victron tank services with configured vessel capacities of 600 L / 500 L / 500 L. Victron `/Capacity` and `/Remaining` use cubic metres, so those values are published as `0.600 / 0.500 / 0.500 m3` and the corresponding remaining volume in m3. `/Level` remains percent.
 
 ### Source selectors — confirmed, receive-only in bridge
 
@@ -143,7 +144,7 @@ cansend can2 02460B88#02   # STOP
 
 The production bridge sends those commands only in response to the Victron connected-genset `/Start` command (or observes/adopts an externally generated Scheiber command). It sends no automatic CAN retry.
 
-A key live finding is that `STOPPED` and `OFF_IDLE` are not equivalent for immediate restart. The engine can reach 0 Hz quickly while the Scheiber controller takes roughly another minute to emit `02440B88#00`. A START sent in that settling interval was ignored; a START sent after `OFF_IDLE` worked. Bridge v5.4.1 documents this but does not yet queue an early start.
+A key live finding is that `STOPPED` and `OFF_IDLE` are not equivalent for immediate restart. The engine can reach 0 Hz quickly while the Scheiber controller takes roughly another minute to emit `02440B88#00`. A START sent in that settling interval was ignored; a START sent after `OFF_IDLE` worked. Bridge v5.4.2 documents this but does not yet queue an early start.
 
 See [`docs/GENERATOR_LIFECYCLE.md`](docs/GENERATOR_LIFECYCLE.md) and [`docs/CERBO_GX_INTEGRATION.md`](docs/CERBO_GX_INTEGRATION.md).
 
@@ -306,14 +307,14 @@ The proposed translation is documented in [`docs/NMEA2000_MAPPING.md`](docs/NMEA
 ## Repository layout
 
 ```text
-cerbo/                  tested Victron connected-genset bridge and installer
+cerbo/                  canonical bridge.py, installer, and runit service
 config/                 capacities, inventory, mappings
 data/raw/               original candump capture (single .xz file)
 data/examples/          selected evidence frames
 data/derived/           generated CSV/JSON results
 scripts/                passive analyzer, lifecycle tracker, and helper tools
 docs/                   engineering, mapping, integration, and handoff docs
-tests/                  decoder and lifecycle regression tests
+tests/                  decoder, lifecycle, and bridge-source regression tests
 ```
 
 ## Source references
