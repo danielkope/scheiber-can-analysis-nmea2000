@@ -9,7 +9,6 @@ CAN_IF="${CAN_IF:-can2}"
 CAN_BITRATE="${CAN_BITRATE:-250000}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-EXPECTED_BRIDGE_SHA256="c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3"
 
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: run this installer as root." >&2
@@ -52,29 +51,18 @@ if [ -f "$APP_DIR/bridge.py" ]; then
     cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
 fi
 
-# The repository stores the reviewed Python source as two base64 payload chunks.
-# Concatenate, decode, and verify before replacing the installed bridge.
+# The repository keeps the large field-tested bridge as a pinned payload and
+# applies small post-validation fixes in assemble_bridge.py. The assembler
+# verifies the original payload SHA, requires the expected patch counts, and
+# compiles the resulting Python before it can be installed.
 fetch_file "source/bridge.py.part1" "$APP_DIR/source/bridge.py.part1"
 fetch_file "source/bridge.py.part2" "$APP_DIR/source/bridge.py.part2"
+fetch_file "assemble_bridge.py" "$APP_DIR/assemble_bridge.py"
+chmod 755 "$APP_DIR/assemble_bridge.py"
 
-python3 - "$APP_DIR/source/bridge.py.part1" "$APP_DIR/source/bridge.py.part2" "$APP_DIR/bridge.py.new" <<'PY'
-import base64
-import pathlib
-import sys
-
-part1, part2, output = map(pathlib.Path, sys.argv[1:4])
-encoded = part1.read_text(encoding="ascii").strip() + part2.read_text(encoding="ascii").strip()
-output.write_bytes(base64.b64decode(encoded, validate=True))
-PY
-
+python3 "$APP_DIR/assemble_bridge.py" -o "$APP_DIR/bridge.py.new"
+python3 -m py_compile "$APP_DIR/bridge.py.new"
 actual_sha="$(sha256sum "$APP_DIR/bridge.py.new" | awk '{print $1}')"
-if [ "$actual_sha" != "$EXPECTED_BRIDGE_SHA256" ]; then
-    echo "ERROR: assembled bridge.py SHA-256 mismatch." >&2
-    echo "Expected: $EXPECTED_BRIDGE_SHA256" >&2
-    echo "Actual:   $actual_sha" >&2
-    rm -f "$APP_DIR/bridge.py.new"
-    exit 1
-fi
 mv "$APP_DIR/bridge.py.new" "$APP_DIR/bridge.py"
 
 fetch_file "service/run" "$APP_DIR/service/run"
@@ -127,4 +115,5 @@ Next checks:
   ip -details -statistics link show $CAN_IF
   tail -n 80 $APP_DIR/bridge.log
   dbus -y com.victronenergy.genset.scheiber /Connected GetValue
+  dbus -y com.victronenergy.tank.scheiber_fresh /Capacity GetValue
 EOF2
