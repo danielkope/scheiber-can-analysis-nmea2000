@@ -9,7 +9,8 @@
   "tanks": {
     "water_l": 600.0,
     "diesel_1_l": 500.0,
-    "diesel_2_l": 500.0
+    "diesel_2_l": 500.0,
+    "victron_dbus_volume_unit": "m3"
   },
   "battery_inventory": {
     "house_batteries": 6,
@@ -43,12 +44,12 @@
     "semantic_status": "confirmed in passive capture and follow-on live testing",
     "transmit_status": "live-tested on this installation; cerbo bridge sends one command per accepted Victron transition and no automatic retries",
     "source_selector_control": "disabled; 0x02420B90 and 0x02420B88 are not transmitted",
-    "restart_caveat": "after 0 Hz STOPPED, wait for 0x02440B88#00 OFF_IDLE before requesting another START on bridge v5.4.1"
+    "restart_caveat": "after 0 Hz STOPPED, wait for 0x02440B88#00 OFF_IDLE before requesting another START on bridge v5.4.2"
   },
   "cerbo_bridge": {
-    "version": "5.4.1",
-    "sha256": "c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3",
-    "field_tested_source_sha256": "b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1",
+    "version": "5.4.2",
+    "sha256": "6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097",
+    "field_tested_v5_4_1_source_sha256": "b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1",
     "default_can_interface": "can2",
     "service": "com.victronenergy.genset.scheiber",
     "victron_manager": "com.victronenergy.generator.startstop1"

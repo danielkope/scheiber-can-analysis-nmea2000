@@ -1,35 +1,51 @@
 # Victron Cerbo GX integration
 
-This document describes the tested Scheiber CAN integration for a Victron Cerbo GX using a DSD TECH SH-C30A USB-CAN adapter (`gs_usb`). It is intentionally separate from the passive capture/analyzer workflow: the analysis tools remain read-only, while the optional Cerbo bridge can transmit the two generator commands that were live-validated on this installation.
+This document describes the tested Scheiber CAN integration for a Victron Cerbo GX using a DSD TECH SH-C30A USB-CAN adapter (`gs_usb`). The passive analyzer elsewhere in the repository remains read-only; the optional Cerbo bridge can transmit only the two generator commands that were live-validated on this installation.
 
-## Status
+## Current tested bridge
 
-Tested on:
+Tested environment:
 
-- Victron Cerbo GX
-- Venus OS v3.75 (`20260624163305 v3.75`)
-- Linux `6.12.90-venus-2`, armv7l
-- DSD TECH SH-C30A exposed as `can2` through `gs_usb`
-- Scheiber CAN at 250 kbit/s with 29-bit extended identifiers
-- bridge version **5.4.1**
-- repository bridge SHA-256: `c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3`
-- field-tested v5.4.1 source SHA-256 before comment-only documentation reconciliation: `b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1`
+```text
+Victron Cerbo GX
+Venus OS v3.75 (20260624163305 v3.75)
+Linux 6.12.90-venus-2, armv7l
+DSD TECH SH-C30A via gs_usb
+Scheiber CAN can2 @ 250000 bit/s
+29-bit extended CAN identifiers
+```
 
-The repository copy differs from the field-tested file only in comments/docstrings that were reconciled with later confirmed SoC/capacity/restart findings; executable Python statements are unchanged.
+Canonical runtime source:
 
-The bridge publishes a native connected-genset service:
+```text
+cerbo/bridge.py
+version 5.4.2
+SHA-256 6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+```
+
+The field-tested v5.4.1 source SHA-256 was:
+
+```text
+b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1
+```
+
+Bridge 5.4.2 preserves the field-tested v5.4.1 generator/CAN behavior and makes one runtime correction: Victron tank `/Capacity` and `/Remaining` are now published in cubic metres instead of litres.
+
+The complete production script is checked into the repository directly. There is no encoded source, assembler, generated runtime source, or install-time source patching.
+
+The bridge publishes:
 
 ```text
 com.victronenergy.genset.scheiber
 ```
 
-Victron `dbus-generator` then creates and owns the normal connected-genset manager, typically:
+Victron `dbus-generator` creates the normal connected-genset manager, typically:
 
 ```text
 com.victronenergy.generator.startstop1
 ```
 
-The bridge also publishes three tank services and, when the GX system battery has been explicitly selected, six house-battery services plus two experimental engine-battery services.
+The bridge also publishes three native Victron tank services and, when the GX system battery is explicitly selected, six house-battery services plus two experimental engine-battery services and the generator starter battery.
 
 ## Safety boundary
 
@@ -40,11 +56,16 @@ The following generator commands were tested live on this installation:
 02460B88#02   STOP
 ```
 
-The bridge sends each requested command once and deliberately does **not** implement automatic CAN retries. Generator feedback is derived from independent Scheiber status/frequency frames and is published to Victron as `/StatusCode`.
+The bridge sends each accepted command once and deliberately does **not** implement automatic CAN retries.
 
-The bridge does **not** transmit AC/House source-selector commands. In particular, it does not send `0x02420B90` or `0x02420B88`. Those selector request IDs are documented for analysis only.
+The bridge does **not** transmit AC/House source-selector requests. In particular, it never sends:
 
-Live validation on one vessel is not an OEM protocol guarantee. Preserve existing generator safety systems and use qualified marine-electrical practices.
+```text
+0x02420B90
+0x02420B88
+```
+
+Those IDs are documented only for protocol analysis. Live validation on one vessel is not an OEM protocol guarantee; preserve the existing generator and marine-electrical safety systems.
 
 ## Wiring
 
@@ -58,22 +79,23 @@ Scheiber six-pin connector to SH-C30A:
 | 1 | Recovery | leave open |
 | 4 | +12 V | **never connect to SH-C30A** |
 
-The SH-C30A is USB powered. On an existing correctly terminated Scheiber bus, leave the adapter's 120-ohm termination **OFF**. With vessel power off, approximately 60 ohms between CAN-H and CAN-L indicates the usual two 120-ohm end terminators.
+The SH-C30A is USB powered. On an existing correctly terminated Scheiber bus, leave its 120-ohm termination **OFF**. With vessel power off, approximately 60 ohms between CAN-H and CAN-L normally indicates two 120-ohm end terminators.
 
 ## Venus OS prerequisites
 
-No Debian/Ubuntu package installation is required. The tested Venus OS image already provided:
+The tested Venus image already provided the required runtime tools:
 
-- `python3`
-- `dbus`
-- Victron `velib_python` / `vedbus.py`
-- `ip`
-- `candump` and `cansend`
-- runit `svc`
+```text
+python3
+dbus
+Victron velib_python / vedbus.py
+ip
+candump
+cansend
+svc
+```
 
-The bridge searches common Victron `velib_python` locations at runtime.
-
-Confirm the USB-CAN interface before installing:
+Confirm the USB-CAN interface before installation:
 
 ```bash
 lsusb
@@ -81,24 +103,24 @@ lsmod | grep -E 'gs_usb|can'
 ip -details link show
 ```
 
-The tested adapter enumerated as `can2`. If yours differs, install with `CAN_IF=canX` or edit the runit service environment.
+The tested adapter enumerated as `can2`.
 
-## Required GX configuration before starting the bridge
+## Required GX configuration
 
-### 1. Explicitly select the existing system battery
+### Explicitly select the existing system battery
 
-The bridge refuses to register its additional `com.victronenergy.battery.*` services while the GX battery selection is `default`. This prevents one of the Scheiber per-battery services from displacing the vessel's existing SmartShunt as the system battery.
+The bridge refuses to register its extra `com.victronenergy.battery.*` services while the GX system-battery selection is `default`. This prevents a Scheiber per-battery service from displacing the existing SmartShunt as the system battery.
 
-Check the setting:
+Check:
 
 ```bash
 dbus -y com.victronenergy.settings \
   /Settings/SystemSetup/BatteryService GetValue
 ```
 
-If it returns `default`, use the Venus OS UI to explicitly select the existing SmartShunt/system battery, then restart the bridge. Generator and tank integration do not depend on the extra battery services.
+If it returns `default`, select the existing SmartShunt/system battery explicitly in Venus OS, then restart the bridge. Generator and tank integration do not depend on the additional battery services.
 
-### 2. Configure AC input roles in Venus OS
+### AC input roles
 
 For the tested installation:
 
@@ -107,20 +129,20 @@ AC input 1 = Shore power
 AC input 2 = Generator
 ```
 
-The corresponding settings were:
+Observed settings:
 
 ```text
 /Settings/SystemSetup/AcInput1 = 3
 /Settings/SystemSetup/AcInput2 = 2
 ```
 
-The bridge reads Scheiber source state for diagnostics but does not rewrite these Victron settings.
+The bridge reads these settings for diagnostics only and does not rewrite them.
 
 ## Installation
 
-### Recommended: install directly from GitHub
+### Install from GitHub
 
-SSH to the Cerbo as root and run:
+After the relevant changes are merged to `main`:
 
 ```bash
 mkdir -p /data/scheiber-gx-installer
@@ -133,37 +155,52 @@ chmod +x install.sh
 CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
 ```
 
-The installer:
+To test an open branch before merge:
 
-1. creates `/data/scheiber-gx`;
-2. installs the pinned v5.4.1 `bridge.py` and verifies its SHA-256;
-3. installs the runit `service/run` wrapper;
-4. creates `/service/scheiber-gx -> /data/scheiber-gx/service`;
-5. adds an idempotent service-link line to `/data/rc.local` so the link is recreated after reboot/update;
-6. starts the service with `svc`.
+```bash
+BRANCH=fix/tank-dbus-units
+BASE="https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/$BRANCH/cerbo"
 
-### Install from a checked-out copy
+wget -O install.sh "$BASE/install.sh"
+chmod +x install.sh
+RAW_BASE="$BASE" CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
+```
 
-If the repository has already been copied to the Cerbo:
+The installer performs this sequence:
+
+1. downloads the complete canonical `cerbo/bridge.py` to a temporary path;
+2. compiles it with `python3 -m py_compile`;
+3. verifies its pinned SHA-256;
+4. downloads the runit `service/run` wrapper;
+5. backs up the currently installed script as `/data/scheiber-gx/bridge.py.previous`;
+6. replaces `/data/scheiber-gx/bridge.py` with the complete verified script;
+7. installs the runit wrapper;
+8. persists `/service/scheiber-gx -> /data/scheiber-gx/service` through `/data/rc.local`;
+9. restarts the service with `svc`.
+
+A failed download, compile, or checksum happens before the installed bridge is replaced.
+
+### Install from a checked-out repository
 
 ```bash
 cd /path/to/scheiber-can-analysis-nmea2000
 CAN_IF=can2 CAN_BITRATE=250000 ./cerbo/install.sh
 ```
 
-The installer uses the local `cerbo/bridge.py` and `cerbo/service/run` when present, so no network download is required.
+When local `cerbo/bridge.py` and `cerbo/service/run` exist, the installer uses those files directly.
 
-## Files on the Cerbo
+## Installed files
 
 ```text
 /data/scheiber-gx/bridge.py
+/data/scheiber-gx/bridge.py.previous
 /data/scheiber-gx/service/run
 /data/scheiber-gx/bridge.log
 /data/scheiber-gx/status.json
 /service/scheiber-gx -> /data/scheiber-gx/service
 ```
 
-The persistent files live under `/data`. The `/service` symlink is recreated from `/data/rc.local`.
+The persistent runtime files live under `/data`.
 
 ## First verification
 
@@ -175,24 +212,32 @@ ip -details -statistics link show can2
 
 Expected essentials:
 
-- bitrate `250000`
-- interface `UP`
-- no rapidly increasing RX/TX errors or bus-off events
+- bitrate `250000`;
+- interface `UP`;
+- no rapidly increasing RX/TX errors;
+- no repeated bus-off events.
 
-Watch traffic without transmitting:
+Passive traffic check:
 
 ```bash
 candump -L can2
 ```
 
-### Bridge service
+### Bridge process
 
 ```bash
 tail -n 100 /data/scheiber-gx/bridge.log
 cat /data/scheiber-gx/status.json
+sha256sum /data/scheiber-gx/bridge.py
 ```
 
-Useful runit commands on the tested image:
+Expected installed SHA for bridge 5.4.2:
+
+```text
+6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+```
+
+Useful service commands:
 
 ```bash
 svc -d /service/scheiber-gx   # stop
@@ -200,9 +245,9 @@ svc -u /service/scheiber-gx   # start
 svc -t /service/scheiber-gx   # restart
 ```
 
-`sv` was not installed on the tested Venus image; use `svc`.
+Use `svc`; `sv` was not installed on the tested image.
 
-### Connected genset D-Bus service
+### Connected-genset D-Bus service
 
 ```bash
 for p in ProductName Connected RemoteStartModeEnabled Start StatusCode; do
@@ -211,7 +256,7 @@ for p in ProductName Connected RemoteStartModeEnabled Start StatusCode; do
 done
 ```
 
-Expected when healthy and stopped:
+Typical healthy stopped state:
 
 ```text
 ProductName:                 'Scheiber Generator'
@@ -221,7 +266,7 @@ Start:                       0
 StatusCode:                  0
 ```
 
-Then confirm Victron matched it with `startstop1`:
+Confirm Victron matched the genset:
 
 ```bash
 for p in Enabled GensetService GensetServiceType GensetInstance \
@@ -232,64 +277,60 @@ for p in Enabled GensetService GensetServiceType GensetInstance \
 done
 ```
 
-`GensetService` should point at `com.victronenergy.genset.scheiber` and `Enabled` should be `1`.
+`GensetService` should be `com.victronenergy.genset.scheiber` and `Enabled` should be `1`.
 
 ## Generator-control architecture
 
-The D-Bus ownership rule is important:
+The ownership rule is fundamental:
 
-- `com.victronenergy.genset.scheiber /Start` is **Victron command state**.
-- Scheiber CAN feedback never writes `/Start` locally.
-- `... /StatusCode` is **physical generator feedback**.
-- A physical/external Scheiber START is adopted into Victron by setting the manager's `/ManualStart=1`.
-- When Victron subsequently writes `/Start=1`, the bridge suppresses the duplicate CAN START.
-- A physical STOP clears `/ManualStart` only when manual ownership is active; automatic Victron conditions are not silently disabled.
+- `com.victronenergy.genset.scheiber /Start` is **Victron command state**;
+- Scheiber CAN feedback never writes `/Start` locally;
+- `/StatusCode` is **physical generator feedback**;
+- a physical/external Scheiber START is adopted into Victron by setting manager `/ManualStart=1`;
+- when Victron then synchronizes `/Start=1`, the bridge suppresses duplicate CAN START;
+- a physical STOP clears `/ManualStart` only when manual ownership is active;
+- automatic Victron start conditions are not silently disabled.
 
-This preserves native Victron generator start/stop conditions, timed runs, runtime accounting, and UI state.
+Victron status mapping:
 
-### Victron status mapping
-
-| Physical state | Victron `/StatusCode` |
+| Physical state | `/StatusCode` |
 |---|---:|
-| OFF / idle / stopped | 0 |
+| stopped / idle | 0 |
 | STARTING | 1 |
 | RUNNING / RUNNING_SETTLED | 8 |
 | STOPPING | 9 |
-| actual error only | 10 |
 
 ## Confirmed generator CAN mapping
 
-### Command frame: `0x02460B88`
+### Command `0x02460B88`
 
-| Payload | Meaning | Live transmit status |
+| Payload | Meaning | Status |
 |---|---|---|
-| `01` | START | confirmed |
-| `02` | STOP | confirmed |
+| `01` | START | live transmit confirmed |
+| `02` | STOP | live transmit confirmed |
 
-For direct low-level diagnostics only:
+Direct low-level diagnostics only:
 
 ```bash
-cansend can2 02460B88#01   # START
-cansend can2 02460B88#02   # STOP
+cansend can2 02460B88#01
+cansend can2 02460B88#02
 ```
 
-Normal operation should use the Victron generator UI or D-Bus manager, not direct `cansend`.
+Normal operation should use the Victron generator UI or D-Bus manager.
 
-### Lifecycle feedback: `0x02440B88`
+### Lifecycle `0x02440B88`
 
-| Payload | Bridge interpretation |
+| Payload | Interpretation |
 |---|---|
-| `00` | `OFF_IDLE` |
-| `01` | `RUNNING_SETTLED` |
-| `02`, `03` | `STARTING` |
-| `04`, `05` | `STOPPING` |
-| `06`, `07` | observed abort/error candidates; unresolved |
+| `00` | OFF_IDLE |
+| `01` | RUNNING_SETTLED |
+| `02`, `03` | STARTING |
+| `04`, `05` | STOPPING |
+| `06`, `07` | abort/error candidates; unresolved |
 
-### Generator frequency: `0x005A1020`
+### Generator frequency `0x005A1020`
 
-Bytes 0-1 are `uint16` little-endian x0.1 Hz.
-
-Examples:
+Bytes 0-1 are `uint16` little-endian x0.1 Hz:
 
 ```text
 F4 01 -> 500 -> 50.0 Hz
@@ -297,24 +338,24 @@ F4 01 -> 500 -> 50.0 Hz
 00 00 -> 0.0 Hz
 ```
 
-Live testing showed this signal is generator-specific: with the generator off while shore power remained present, `0x005A1020` stayed at 0 Hz while the shared `0x02040898` AC telemetry still showed approximately 235 V / 50 Hz.
+Live testing established that this signal is generator-specific. With the generator off and shore power present, `0x005A1020` remained 0 Hz while shared `0x02040898` still reported approximately 235 V / 50 Hz.
 
-The bridge requires 47-53 Hz and a 3 s hold before declaring RUNNING. A 0 Hz generator-specific sample confirms physical STOPPED.
+The bridge requires 47-53 Hz plus a 3 s confirmation hold before declaring RUNNING. A 0 Hz generator-specific sample confirms physical STOPPED.
 
-## Important post-stop behavior
+## Post-stop restart caveat
 
 Scheiber has two useful stopped milestones:
 
-1. `005A1020 = 0.0 Hz` -> engine/frequency has stopped (`STOPPED`).
-2. `02440B88#00` -> controller has finished its shutdown settling (`OFF_IDLE`).
+1. `005A1020 = 0.0 Hz` -> physical frequency stopped (`STOPPED`);
+2. `02440B88#00` -> controller shutdown settling complete (`OFF_IDLE`).
 
-On the tested installation, `#00` can arrive roughly one minute after the engine has already stopped. A START sent during that interval was transmitted correctly by the bridge but ignored by the Scheiber controller. Starting again after `OFF_IDLE` worked.
+On the tested installation, `OFF_IDLE` can arrive roughly one minute after the engine reaches 0 Hz. A START sent during that interval was transmitted but ignored by Scheiber. Starting again after `OFF_IDLE` succeeded.
 
-**Current v5.4.1 limitation:** the bridge does not queue an early Victron START until `OFF_IDLE`. After a stop, wait for `OFF_IDLE` before requesting another start. A future bridge version may add a one-shot queued-start behavior without changing Victron's timer semantics.
+Bridge 5.4.2 does **not** queue an early START. Wait for `OFF_IDLE` before requesting a new start.
 
-## Native timed runs
+## Native Victron timed runs
 
-Victron timed runs work through `com.victronenergy.generator.startstop1`:
+Timed runs are manager-owned and were proven end-to-end:
 
 ```text
 /ManualStart = 1
@@ -323,33 +364,31 @@ Victron timed runs work through `com.victronenergy.generator.startstop1`:
 /RunningByConditionCode = 1
 ```
 
-`/ManualStartTimer` counts down while `/Runtime` counts up. When the timer reaches zero, Victron writes `/Start=0`; the bridge sends exactly one `02460B88#02`, and physical shutdown feedback updates `/StatusCode`.
+`/ManualStartTimer` counts down while `/Runtime` counts up. At expiry, Victron writes `/Start=0`; the bridge sends exactly one `02460B88#02`; Scheiber shutdown feedback updates `/StatusCode`.
 
-Current gui-v2 versions may show the timer icon without exposing the old live `+/-` timer adjustment controls. That is a Victron UI behavior; the backend timer itself remains native and writable. No gui-v2 patch is included in this repository.
+Current gui-v2 may show the timed-run icon without exposing the older live +/- duration controls. That is a Victron UI behavior; the timer backend remains native and writable. No gui-v2 patch is included here.
 
 ### D-Bus CLI type warning
 
-If manually writing `/ManualStartTimer`, pass an integer variant. With Victron's `dbus` command, `%12000` is an integer; plain `12000` may be interpreted as a string. A string timer can crash `dbus-generator` when it attempts integer arithmetic.
-
-Prefer the Victron UI. If CLI testing is necessary, verify the value immediately with `GetValue`.
+When manually writing `/ManualStartTimer`, use an integer variant. With Victron's `dbus` utility, `%12000` is an integer; plain `12000` may become a string. A string timer can crash `dbus-generator` when it performs integer arithmetic. Prefer the Victron UI.
 
 ## Generator-manager restart recovery
 
-v5.4.1 contains a specific recovery guard for `dbus-generator` restarts. Without it, a newly recreated `startstop1` initializes its connected genset `/Start` to zero, which can look like a real STOP while the physical generator is already running.
+The bridge protects a running generator if `dbus-generator/startstop1` disappears and is recreated. Without this guard, a replacement manager initializes `/Start=0`, which can look like a real STOP.
 
-The bridge now:
+The bridge:
 
-- caches manager `/ManualStart`, `/ManualStartTimer`, running condition, and state;
-- enters a 30 s recovery guard if `startstop1` disappears while STARTING/RUNNING;
+- caches `/ManualStart`, `/ManualStartTimer`, running condition, and state;
+- enters a 30 s recovery guard while the physical genset is STARTING/RUNNING;
 - suppresses the replacement manager's initialization `/Start=0` from CAN;
-- restores manual ownership and a numeric timed-run value when applicable;
-- suppresses the duplicate synchronized `/Start=1` CAN transmission.
+- restores a numeric timed-run value and manual ownership where applicable;
+- suppresses the duplicate synchronized `/Start=1` transmission.
 
-Look for `MANAGER RECOVERY` messages in `bridge.log` when validating this path.
+Look for `MANAGER RECOVERY` in `bridge.log` when validating this path.
 
 ## AC source-state monitoring
 
-These IDs are receive-only in the bridge:
+Receive-only mappings:
 
 | CAN ID | Meaning |
 |---|---|
@@ -366,15 +405,15 @@ Source enum:
 04 = GENERATOR
 ```
 
-The corresponding request IDs `0x02420B90` and `0x02420B88` are **not transmitted** by this bridge.
+Request IDs `0x02420B90` and `0x02420B88` are not transmitted.
 
-There is currently no synthetic `com.victronenergy.acsystem.scheiber` service. On systems without VE.Bus/acsystem, SystemCalc may therefore place the connected genset in a generic/positional AC-input slot and the UI can show a misleading Grid label. This is a topology/UI issue, not a generator-control failure.
+There is currently no synthetic `com.victronenergy.acsystem.scheiber` service. On systems without VE.Bus/acsystem, SystemCalc may therefore show imperfect AC topology labels even though generator control itself works.
 
 ## Tank services
 
-Confirmed frame `0x02040580` contains big-endian `uint16` percentage values:
+Confirmed frame `0x02040580` contains big-endian `uint16` percentages:
 
-| Bytes | Tank | Capacity configured in bridge |
+| Bytes | Tank | Vessel capacity |
 |---|---|---:|
 | 0-1 | Fresh water | 600 L |
 | 2-3 | Diesel tank 1 | 500 L |
@@ -388,172 +427,112 @@ com.victronenergy.tank.scheiber_diesel1
 com.victronenergy.tank.scheiber_diesel2
 ```
 
-Tank telemetry is sample-and-hold rather than being invalidated merely because a frame is sparse.
+### Tank units
+
+The configuration remains in litres for human readability, but Victron D-Bus volume paths use cubic metres:
+
+```text
+/Level      percent
+/Capacity   m3
+/Remaining  m3
+```
+
+Therefore:
+
+```text
+600 L -> /Capacity 0.600
+500 L -> /Capacity 0.500
+```
+
+For example, 74% of a 600 L fresh-water tank is:
+
+```text
+/Level      74.0
+/Capacity   0.600
+/Remaining  0.444
+```
+
+Verify all three after installation:
+
+```bash
+for s in \
+  com.victronenergy.tank.scheiber_fresh \
+  com.victronenergy.tank.scheiber_diesel1 \
+  com.victronenergy.tank.scheiber_diesel2
+do
+    echo "===== $s ====="
+    for p in Level Capacity Remaining FluidType CustomName; do
+        printf '%-12s ' "$p:"
+        dbus -y "$s" "/$p" GetValue
+    done
+done
+```
+
+The tank service text formatter converts m3 back to litres for human-readable display. Signal K receives the correct SI values directly from D-Bus.
 
 ## Battery services
 
 ### Six house batteries
 
-| CAN ID | Voltage | Current | SoC |
-|---|---|---|---|
-| `0x06020580` | bytes 0-1 LE x0.01 V | bytes 2-3 LE, `(raw-0x4E00)*0.1 A` candidate scale | bytes 4-5 LE, SoC % confirmed for this installation |
-| `0x06060580` | same | same | same |
-| `0x060A0580` | same | same | same |
-| `0x060E0580` | same | same | same |
-| `0x06120580` | same | same | same |
-| `0x06160580` | same | same | same |
+```text
+06020580 06060580 060A0580 060E0580 06120580 06160580
+```
 
-The physical battery 1-6 ordering is not yet proven. Voltage is confirmed. Current sign/offset is strong; the x0.1 A scale remains a working candidate. The third word is treated as SoC, not temperature, based on installation validation.
+Per frame:
+
+| Bytes | Decode | Confidence |
+|---|---|---|
+| 0-1 | LE16 x0.01 V | confirmed |
+| 2-3 | `(LE16 - 0x4E00) * 0.1 A` | sign/offset strong; scale candidate |
+| 4-5 | LE16 x1 % SoC | confirmed for this installation |
+
+Physical house-battery 1-6 ordering remains to be validated.
 
 ### Engine batteries
 
 ```text
-0x06140580 -> Engine Battery A (experimental)
-0x06180580 -> Engine Battery B (experimental)
+06140580 -> Engine Battery A
+06180580 -> Engine Battery B
 ```
 
-The current bridge uses an experimental voltage scale of `0.00053 V/count`, producing plausible ~13.6 V values in the observed data. Physical port/starboard identity and scale still need one-engine-at-a-time crank validation.
+The current `0.00053 V/count` scale is experimental and produces plausible ~13.6 V values. Port/starboard identity and scale still need crank validation.
 
-### Generator starter battery
+### Generator starter
 
-`0x00501020` bytes 0-1 are decoded little-endian x0.1 V and published as `/StarterVoltage`. The same frame also carries candidate charger current and AC-input voltage diagnostics.
+`00501020` bytes 0-1 LE x0.1 V is published as generator starter voltage. Its current and AC-input fields remain diagnostic/candidate data.
 
-## Startup resynchronization
+## Rollback
 
-When the bridge starts while the generator is already running, it tries to recover physical state rather than assuming OFF. Generator-specific `0x005A1020` nominal frequency and lifecycle feedback are the strongest evidence.
-
-v5.4.1 also uses two consecutive high-AC samples from `0x00501020` as a fast startup-resync hint. That field belongs to the `0x1020` charger family and should not be treated as the sole long-term proof of generator state; the later generator-specific frequency/status frames remain authoritative.
-
-## Debugging
-
-### Service not running
-
-```bash
-ls -l /service/scheiber-gx
-ps | grep '[b]ridge.py'
-tail -n 120 /data/scheiber-gx/bridge.log
-svc -t /service/scheiber-gx
-```
-
-### `can2` missing
-
-```bash
-lsusb
-lsmod | grep -E 'gs_usb|can'
-modprobe can
-modprobe can_raw
-modprobe gs_usb
-ip -details link show
-```
-
-If the adapter enumerated under another name, reinstall with the correct `CAN_IF` or adjust the runit wrapper.
-
-### Bus errors / no traffic
-
-```bash
-ip -details -statistics link show can2
-candump -L can2
-```
-
-Check:
-
-- 250 kbit/s
-- H/L polarity
-- common ground
-- termination
-- adapter programming switch in normal mode
-- vessel Scheiber network awake
-
-Disconnect the adapter if error counters rise rapidly or the interface repeatedly goes bus-off.
-
-### Generator appears but cannot be controlled
-
-```bash
-dbus -y com.victronenergy.genset.scheiber /Connected GetValue
-dbus -y com.victronenergy.genset.scheiber /RemoteStartModeEnabled GetValue
-dbus -y com.victronenergy.genset.scheiber /Start GetValue
-dbus -y com.victronenergy.generator.startstop1 /Enabled GetValue
-dbus -y com.victronenergy.generator.startstop1 /GensetService GetValue
-```
-
-Also inspect the bridge log for `Victron requested START/STOP` and the corresponding single `TX 02460B88#01/#02` line.
-
-### Generator stopped but immediate restart does nothing
-
-Look for:
+The installer backs up the previous runtime script before replacement:
 
 ```text
-ACTUAL GENERATOR STATE: ... -> STOPPED
+/data/scheiber-gx/bridge.py.previous
 ```
 
-followed later by:
-
-```text
-RX generator state 02440B88#00
-... -> OFF_IDLE
-```
-
-Wait for `OFF_IDLE` before restarting on v5.4.1.
-
-### Battery services do not appear
-
-Check:
+Manual rollback:
 
 ```bash
-dbus -y com.victronenergy.settings \
-  /Settings/SystemSetup/BatteryService GetValue
+svc -d /service/scheiber-gx
+cp /data/scheiber-gx/bridge.py.previous /data/scheiber-gx/bridge.py
+chmod 755 /data/scheiber-gx/bridge.py
+python3 -m py_compile /data/scheiber-gx/bridge.py
+svc -u /service/scheiber-gx
 ```
 
-If it is `default`, explicitly select the existing SmartShunt/system battery and restart the bridge. The log intentionally explains this safety refusal.
-
-### Manager disappeared/restarted
-
-The bridge should log `MANAGER RECOVERY armed`, rematch `startstop1`, restore manual/timed ownership if needed, and then log `MANAGER RECOVERY complete`. It should **not** send a synthetic STOP just because the replacement manager initialized `/Start=0`.
-
-## Status snapshot
-
-The bridge writes `/data/scheiber-gx/status.json` every few seconds. It includes:
-
-- physical generator state and reason;
-- latest frequency/starter/AC diagnostics;
-- panel applied-source values;
-- manager cache and recovery state;
-- battery samples;
-- tank samples.
-
-This is the quickest single file to attach when reporting a bridge issue.
-
-## Uninstall / rollback
-
-Disable the service while leaving persistent files for recovery:
-
-```bash
-/data/scheiber-gx-installer/uninstall.sh
-```
-
-or from a repository checkout:
+To disable the integration while retaining files:
 
 ```bash
 ./cerbo/uninstall.sh
 ```
 
-The installer keeps the prior bridge at `/data/scheiber-gx/bridge.py.previous` when updating an existing installation. A manual rollback is:
+## Diagnostic capture
+
+For a labelled passive capture:
 
 ```bash
-svc -d /service/scheiber-gx
-cp /data/scheiber-gx/bridge.py.previous /data/scheiber-gx/bridge.py
-svc -u /service/scheiber-gx
+mkdir -p /data/scheiber-captures
+OUT=/data/scheiber-captures/capture-$(date +%Y%m%d-%H%M%S).log
+candump -L can2 > "$OUT"
 ```
 
-## Known follow-up work
-
-Not implemented in v5.4.1:
-
-- queue a Victron START requested during post-stop settling until `02440B88#00` / `OFF_IDLE`;
-- publish a synthetic two-input `com.victronenergy.acsystem.scheiber` service for Shore/Generator topology;
-- AC/House source-selector control;
-- HVAC/air-conditioning CAN decoding;
-- final physical port/starboard engine-battery identity and calibrated scale;
-- gui-v2 timer-control restoration.
-
-The first two items should be implemented independently: generator control is already functional without AC-source control, and the AC-system model must not expose writable source-control paths unless they are intentionally supported.
+Do not use broad CAN replay as a diagnostic technique on the live vessel bus.

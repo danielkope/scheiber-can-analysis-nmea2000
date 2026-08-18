@@ -9,21 +9,21 @@ CAN_IF="${CAN_IF:-can2}"
 CAN_BITRATE="${CAN_BITRATE:-250000}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-EXPECTED_BRIDGE_SHA256="c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3"
+EXPECTED_BRIDGE_SHA256="6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097"
 
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: run this installer as root." >&2
     exit 1
 fi
 
-for cmd in python3 ip sha256sum ln chmod mkdir mv; do
+for cmd in python3 ip sha256sum ln chmod mkdir mv cp rm grep awk; do
     command -v "$cmd" >/dev/null 2>&1 || {
         echo "ERROR: required command not found: $cmd" >&2
         exit 1
     }
 done
 
-mkdir -p "$APP_DIR/service" "$APP_DIR/source"
+mkdir -p "$APP_DIR/service"
 
 fetch_file() {
     src_name="$1"
@@ -48,37 +48,35 @@ fetch_file() {
     exit 1
 }
 
-if [ -f "$APP_DIR/bridge.py" ]; then
-    cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
-fi
-
-# The repository stores the reviewed Python source as two base64 payload chunks.
-# Concatenate, decode, and verify before replacing the installed bridge.
-fetch_file "source/bridge.py.part1" "$APP_DIR/source/bridge.py.part1"
-fetch_file "source/bridge.py.part2" "$APP_DIR/source/bridge.py.part2"
-
-python3 - "$APP_DIR/source/bridge.py.part1" "$APP_DIR/source/bridge.py.part2" "$APP_DIR/bridge.py.new" <<'PY'
-import base64
-import pathlib
-import sys
-
-part1, part2, output = map(pathlib.Path, sys.argv[1:4])
-encoded = part1.read_text(encoding="ascii").strip() + part2.read_text(encoding="ascii").strip()
-output.write_bytes(base64.b64decode(encoded, validate=True))
-PY
+# Fetch and validate the complete canonical script before touching the running
+# installation. A failed download, compile, or checksum leaves the old bridge
+# in place.
+fetch_file "bridge.py" "$APP_DIR/bridge.py.new"
+python3 -m py_compile "$APP_DIR/bridge.py.new"
 
 actual_sha="$(sha256sum "$APP_DIR/bridge.py.new" | awk '{print $1}')"
 if [ "$actual_sha" != "$EXPECTED_BRIDGE_SHA256" ]; then
-    echo "ERROR: assembled bridge.py SHA-256 mismatch." >&2
+    echo "ERROR: bridge.py SHA-256 mismatch." >&2
     echo "Expected: $EXPECTED_BRIDGE_SHA256" >&2
     echo "Actual:   $actual_sha" >&2
     rm -f "$APP_DIR/bridge.py.new"
     exit 1
 fi
-mv "$APP_DIR/bridge.py.new" "$APP_DIR/bridge.py"
 
-fetch_file "service/run" "$APP_DIR/service/run"
+fetch_file "service/run" "$APP_DIR/service/run.new"
+
+# Only after validation succeeds do we back up and replace the installed files.
+if [ -f "$APP_DIR/bridge.py" ]; then
+    cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
+fi
+mv "$APP_DIR/bridge.py.new" "$APP_DIR/bridge.py"
+mv "$APP_DIR/service/run.new" "$APP_DIR/service/run"
 chmod 755 "$APP_DIR/bridge.py" "$APP_DIR/service/run"
+
+# Remove obsolete packaging files from earlier installer revisions. They are no
+# longer part of the runtime or installation path.
+rm -f "$APP_DIR/assemble_bridge.py"
+rm -rf "$APP_DIR/source"
 
 echo "$CAN_IF" > "$APP_DIR/CAN_INTERFACE"
 echo "$CAN_BITRATE" > "$APP_DIR/CAN_BITRATE"
@@ -117,9 +115,11 @@ cat <<EOF2
 Scheiber GX bridge installed.
 
   bridge:    $APP_DIR/bridge.py
+  version:   5.4.2
   service:   $SERVICE_LINK
   CAN:       $CAN_IF @ $CAN_BITRATE bit/s
   SHA-256:   $actual_sha
+  backup:    $APP_DIR/bridge.py.previous
   log:       $APP_DIR/bridge.log
   status:    $APP_DIR/status.json
 
@@ -127,4 +127,5 @@ Next checks:
   ip -details -statistics link show $CAN_IF
   tail -n 80 $APP_DIR/bridge.log
   dbus -y com.victronenergy.genset.scheiber /Connected GetValue
+  dbus -y com.victronenergy.tank.scheiber_fresh /Capacity GetValue
 EOF2

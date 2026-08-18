@@ -1,21 +1,25 @@
-import base64
 import hashlib
 from pathlib import Path
 import unittest
 
 
-EXPECTED_SHA256 = "c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3"
+EXPECTED_SHA256 = "6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097"
 
 
 class TestCerboBridgeSource(unittest.TestCase):
-    def test_payload_reconstructs_reviewed_bridge_and_compiles(self):
-        root = Path(__file__).resolve().parents[1] / "cerbo"
-        encoded = "".join(
-            (root / "source" / name).read_text(encoding="ascii").strip()
-            for name in ("bridge.py.part1", "bridge.py.part2")
-        )
-        source = base64.b64decode(encoded, validate=True)
+    def test_canonical_bridge_compiles_and_has_correct_tank_units(self):
+        root = Path(__file__).resolve().parents[1]
+        path = root / "cerbo" / "bridge.py"
+        source = path.read_bytes()
+        text = source.decode("utf-8")
+
         self.assertEqual(hashlib.sha256(source).hexdigest(), EXPECTED_SHA256)
+        self.assertIn('BRIDGE_VERSION = "5.4.2"', text)
+        self.assertIn('None if capacity_l is None else float(capacity_l) / 1000.0', text)
+        self.assertIn('"capacity_m3": svc["/Capacity"]', text)
+        self.assertIn('"remaining_m3": svc["/Remaining"]', text)
+        self.assertNotIn('"capacity_l": svc["/Capacity"]', text)
+        self.assertNotIn('"remaining_l": svc["/Remaining"]', text)
         compile(source, "bridge.py", "exec")
 
 
