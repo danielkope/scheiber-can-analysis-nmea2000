@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reconstruct the reviewed bridge.py and apply repository-maintained fixes.
 
-The large field-tested source is kept as immutable base64 payload chunks. Small,
+The large field-tested source is kept as an immutable base64 payload. Small,
 reviewable corrections discovered after field validation are applied here so
 that the original source provenance remains verifiable.
 """
@@ -12,27 +12,18 @@ import hashlib
 import re
 from pathlib import Path
 
-# SHA-256 of the reviewed v5.4.1 repository payload before post-validation fixes.
-SOURCE_PAYLOAD_SHA256 = "c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3"
-SOURCE_PARTS = ("bridge.py.part1", "bridge.py.part2")
+# SHA-256 of the decoded v5.4.1 repository source payload.
+# The two files under cerbo/source are independently base64-encoded chunks;
+# decode each chunk first, then concatenate the decoded bytes.
+SOURCE_PAYLOAD_SHA256 = "d66c194a4753497dc6f6270e04cf615acc76ef3868efc8ffe522ea992725c208"
 
 
 def decode_source_chunks(root: Path) -> bytes:
-    """Decode each payload chunk independently, then concatenate the bytes.
-
-    The repository chunks are separately base64-encoded and therefore each may
-    contain its own '=' padding. Concatenating their encoded text before calling
-    b64decode makes Python 3.12 correctly reject the input as "Excess data after
-    padding". Decode each chunk first and concatenate the decoded byte strings.
-    """
-    decoded = []
-    for name in SOURCE_PARTS:
+    parts = []
+    for name in ("bridge.py.part1", "bridge.py.part2"):
         encoded = (root / "source" / name).read_text(encoding="ascii").strip()
-        try:
-            decoded.append(base64.b64decode(encoded, validate=True))
-        except Exception as exc:
-            raise RuntimeError(f"invalid base64 payload in {name}: {exc}") from exc
-    return b"".join(decoded)
+        parts.append(base64.b64decode(encoded, validate=True))
+    return b"".join(parts)
 
 
 def apply_source_patches(data: bytes) -> bytes:
@@ -52,8 +43,6 @@ def apply_source_patches(data: bytes) -> bytes:
     patched = []
 
     for line in lines:
-        # Patch only executable tank publication/calculation lines. Do not
-        # rewrite the status-JSON key named "capacity_l".
         if (
             ("/Capacity" in line)
             and re.search(r"\bcapacity_l\b", line)
@@ -65,8 +54,6 @@ def apply_source_patches(data: bytes) -> bytes:
             )
             capacity_patches += count
 
-        # Same for /Remaining: preserve the level-percent calculation, but
-        # make its capacity factor cubic metres instead of litres.
         if (
             ("/Remaining" in line)
             and re.search(r"\bcapacity_l\b", line)
@@ -82,7 +69,6 @@ def apply_source_patches(data: bytes) -> bytes:
 
     text = "".join(patched)
 
-    # The status snapshot follows the actual D-Bus units after this fix.
     text, status_capacity = re.subn(
         r'"capacity_l"\s*:', '"capacity_m3":', text, count=1
     )
