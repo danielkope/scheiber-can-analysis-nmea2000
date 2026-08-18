@@ -29,14 +29,15 @@ persistent app /data/scheiber-gx
 Bridge:
 
 ```text
-version 5.4.1
+version 5.4.2
+canonical source cerbo/bridge.py
 D-Bus service com.victronenergy.genset.scheiber
 Victron manager com.victronenergy.generator.startstop1
-repository assembled SHA-256 c4b6f4615b0a388e63c3aec315979154f9b7aed44a18d8e226b36877b8dd3ee3
-field-tested pre-comment-reconciliation SHA-256 b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1
+SHA-256 6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+field-tested v5.4.1 source SHA-256 b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1
 ```
 
-Executable statements are unchanged between those two hashes; repository comments/documentation were reconciled with later confirmed SoC/capacity/restart findings.
+Version 5.4.2 keeps the field-tested v5.4.1 generator/CAN behavior and fixes the tank D-Bus volume unit. The repository now stores the complete production Python source directly; there is no encoded source, assembler, or install-time source patching.
 
 Installation and debugging are in `docs/CERBO_GX_INTEGRATION.md`; the installer is `cerbo/install.sh`.
 
@@ -74,13 +75,23 @@ Live tests also established that `02040898` can show shore/common 235 V / 50 Hz 
 
 After STOP, 0 Hz / `STOPPED` occurs before `02440B88#00` / `OFF_IDLE`. The settling delay was around one minute in a live test. A START sent during that window was ignored by Scheiber; a START from `OFF_IDLE` succeeded.
 
-A future v5.4.2 candidate should queue a Victron `/Start=1` received while recently `STOPPED`, send exactly one physical START upon `#00`, and cancel the queued action if Victron returns `/Start=0` first. Do not implement retries and do not alter `/ManualStartTimer` semantics.
+A future bridge version may queue a Victron `/Start=1` received while recently `STOPPED`, send exactly one physical START upon `#00`, and cancel the queued action if Victron returns `/Start=0` first. Do not implement retries and do not alter `/ManualStartTimer` semantics.
 
 ## Current telemetry
 
 ### Tanks
 
-`02040580` BE words: fresh %, diesel1 %, diesel2 %. Capacities: 600 L, 500 L, 500 L. Published as native Victron tank services.
+`02040580` BE words: fresh %, diesel1 %, diesel2 %. Vessel capacities: 600 L, 500 L, 500 L.
+
+Published native Victron tank services use the Victron D-Bus volume unit:
+
+```text
+/Level      percent
+/Capacity   cubic metres
+/Remaining  cubic metres
+```
+
+Therefore the configured capacities are published as `0.600`, `0.500`, and `0.500 m3`. The service text formatter presents those values as litres for the GX UI. This unit correction is the runtime change from bridge v5.4.1 to v5.4.2.
 
 ### House batteries
 
@@ -117,6 +128,7 @@ Request IDs `02420B90` / `02420B88` are documented but not transmitted by the br
 3. Labelled HVAC/air-conditioning CAN capture now that the units can be operated one at a time.
 4. Engine A/B physical identity and scale validation.
 5. Physical house-battery 1-6 ordering.
+6. Signal K / NMEA 2000 publication of validated telemetry, beginning with PGN 127505 tank levels after tank-unit verification.
 
 ## Service/debug commands
 
@@ -135,6 +147,22 @@ dbus -y com.victronenergy.genset.scheiber /StatusCode GetValue
 dbus -y com.victronenergy.generator.startstop1 /ManualStart GetValue
 dbus -y com.victronenergy.generator.startstop1 /ManualStartTimer GetValue
 dbus -y com.victronenergy.generator.startstop1 /RunningByCondition GetValue
+```
+
+Tank verification:
+
+```bash
+for s in \
+  com.victronenergy.tank.scheiber_fresh \
+  com.victronenergy.tank.scheiber_diesel1 \
+  com.victronenergy.tank.scheiber_diesel2
+do
+  echo "===== $s ====="
+  for p in Level Capacity Remaining; do
+    printf '%-12s ' "$p:"
+    dbus -y "$s" "/$p" GetValue
+  done
+done
 ```
 
 Use `svc`, not `sv`, on the tested Venus image.
