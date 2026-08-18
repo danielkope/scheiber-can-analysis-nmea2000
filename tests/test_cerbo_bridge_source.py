@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -21,14 +20,14 @@ class TestCerboBridgeSource(unittest.TestCase):
     def test_payload_reconstructs_and_tank_unit_fix_compiles(self):
         root = Path(__file__).resolve().parents[1]
         cerbo = root / "cerbo"
-        encoded = "".join(
-            (cerbo / "source" / name).read_text(encoding="ascii").strip()
-            for name in ("bridge.py.part1", "bridge.py.part2")
-        )
-        source = base64.b64decode(encoded, validate=True)
+        assembler = load_assembler(root)
+
+        # Each source part is independently base64-encoded and may have its own
+        # padding. The assembler must decode parts separately before joining the
+        # decoded bytes; joining the encoded strings first fails on Python 3.12.
+        source = assembler.decode_source_chunks(cerbo)
         self.assertEqual(hashlib.sha256(source).hexdigest(), SOURCE_PAYLOAD_SHA256)
 
-        assembler = load_assembler(root)
         patched = assembler.apply_source_patches(source)
         text = patched.decode("utf-8")
 
