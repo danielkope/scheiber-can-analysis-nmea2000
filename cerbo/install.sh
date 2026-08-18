@@ -66,7 +66,9 @@ fi
 fetch_file "service/run" "$APP_DIR/service/run.new"
 
 # Only after validation succeeds do we back up and replace the installed files.
+install_mode="fresh"
 if [ -f "$APP_DIR/bridge.py" ]; then
+    install_mode="update"
     cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
 fi
 mv "$APP_DIR/bridge.py.new" "$APP_DIR/bridge.py"
@@ -114,12 +116,13 @@ fi
 cat <<EOF2
 Scheiber GX bridge installed.
 
+  mode:      $install_mode
   bridge:    $APP_DIR/bridge.py
   version:   5.4.2
   service:   $SERVICE_LINK
   CAN:       $CAN_IF @ $CAN_BITRATE bit/s
   SHA-256:   $actual_sha
-  backup:    $APP_DIR/bridge.py.previous
+  backup:    $APP_DIR/bridge.py.previous (created on updates)
   log:       $APP_DIR/bridge.log
   status:    $APP_DIR/status.json
 

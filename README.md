@@ -10,12 +10,13 @@ Reverse-engineering notes, evidence, tools, and reproducible integration work fo
 - A pure-Python decoder and CSV/JSON report generator.
 - A context-aware passive generator lifecycle state machine.
 - A tested Victron Cerbo GX connected-genset bridge with runit installer, rollback path, D-Bus integration, tanks, batteries, and diagnostics.
+- A live-validated Signal K -> NMEA 2000 tank path using PGN 127505, including B&G Zeus3 compatibility guidance.
 - Wiring/setup instructions for the SH-C30A on Raspberry Pi and Cerbo GX.
 - A mapping register with datatypes, endianness, scales, offsets, units, observed ranges, confidence, and proposed NMEA 2000 PGNs.
 - A validation plan for the batteries, chargers, source panels, generator, and tanks.
-- Dry-run NMEA 2000 translation examples.
+- Dry-run NMEA 2000 translation examples for mappings that are not yet live-enabled.
 
-The historical analyzer and NMEA 2000 work do not transmit Scheiber control frames. The optional Cerbo bridge transmits only the live-tested generator `START`/`STOP` frame (`0x02460B88`) and explicitly does not transmit source-selector requests.
+The historical analyzer does not transmit Scheiber control frames. The optional Cerbo bridge transmits only the live-tested generator `START`/`STOP` frame (`0x02460B88`) and explicitly does not transmit source-selector requests.
 
 ## Known installation inventory
 
@@ -55,7 +56,9 @@ SHA-256 6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
 
 Version 5.4.2 preserves the field-tested v5.4.1 generator/CAN behavior and corrects the Victron tank-volume D-Bus units. The v5.4.1 field-tested source SHA-256 is retained in `config/system_config.json` for provenance.
 
-Quick installation after merge:
+### Fresh install or update
+
+The same repository installer is used for both a new installation and an update. Re-download it before running so an old local copy cannot retain obsolete deployment logic:
 
 ```bash
 mkdir -p /data/scheiber-gx-installer
@@ -66,7 +69,7 @@ chmod +x install.sh
 CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
 ```
 
-The installer downloads the complete `bridge.py`, compiles it, verifies the pinned SHA-256, backs up the previous installed script, and then restarts the runit service. See the integration guide before starting the service, especially the explicit system-battery selection requirement and the post-stop `OFF_IDLE` restart caveat.
+The installer downloads the complete `bridge.py`, compiles it, verifies the pinned SHA-256, backs up the previous installed script when present, and restarts the runit service. See [`cerbo/README.md`](cerbo/README.md) for separate fresh-install/update explanations and the integration guide for the system-battery requirement and post-stop `OFF_IDLE` restart caveat.
 
 ## Key findings
 
@@ -83,6 +86,20 @@ CAN ID `0x02040580` is four big-endian unsigned 16-bit words:
 ```
 
 The Cerbo bridge publishes these as native Victron tank services with configured vessel capacities of 600 L / 500 L / 500 L. Victron `/Capacity` and `/Remaining` use cubic metres, so those values are published as `0.600 / 0.500 / 0.500 m3` and the corresponding remaining volume in m3. `/Level` remains percent.
+
+### Tanks on Signal K / NMEA 2000 — live
+
+Signal K receives the Victron tank services as:
+
+```text
+tanks.freshWater.90
+tanks.fuel.91
+tanks.fuel.92
+```
+
+The standard `signalk-to-nmea2000` plugin has been live-tested forwarding them as PGN 127505 Fluid Level using NMEA tank instances 6, 7, and 8. Signal K then received those PGNs back from the VE.Can/NMEA 2000 connection with matching level and capacity values, proving the output was present on the NMEA 2000 bus.
+
+The live mapping and B&G Zeus3 display/setup guidance are in [`docs/SIGNALK_NMEA2000.md`](docs/SIGNALK_NMEA2000.md). The consolidated standard-PGN register is in [`docs/NMEA2000_MAPPING.md`](docs/NMEA2000_MAPPING.md).
 
 ### Source selectors — confirmed, receive-only in bridge
 
@@ -294,15 +311,17 @@ If there are no frames, verify CAN-H/CAN-L polarity, the common ground, interfac
 
 ## NMEA 2000 gateway architecture
 
-Scheiber CAN and NMEA 2000 are separate protocols. Do not join the wires as one bus merely because both can operate at 250 kbit/s.
+Scheiber CAN and NMEA 2000 remain separate protocols and separate CAN interfaces.
 
-Use two independent CAN interfaces:
+On the current Cerbo installation the preferred gateway path is:
 
 ```text
-Scheiber bus <-> CAN interface A <-> gateway <-> CAN interface B <-> NMEA 2000 / VE.Can
+Scheiber bus -> SH-C30A/can2 -> Victron D-Bus -> Signal K -> VE.Can/NMEA 2000
 ```
 
-The proposed translation is documented in [`docs/NMEA2000_MAPPING.md`](docs/NMEA2000_MAPPING.md). The initial NMEA implementation should remain read-only on Scheiber and dry-run/log-only on the NMEA side. The live-tested Cerbo generator bridge is a separate integration path and does not imply that source-selection control or arbitrary Scheiber frame replay is safe.
+The three tank mappings are now live on NMEA 2000 as standard PGN 127505. Other mappings remain staged according to confidence: generator starter voltage is the recommended next battery value; experimental engine-battery identity/scale and candidate house current are not ready for authoritative NMEA 2000 publication.
+
+See [`docs/SIGNALK_NMEA2000.md`](docs/SIGNALK_NMEA2000.md) and [`docs/NMEA2000_MAPPING.md`](docs/NMEA2000_MAPPING.md).
 
 ## Repository layout
 
@@ -326,11 +345,14 @@ tests/                  decoder, lifecycle, and bridge-source regression tests
 - Victron dbus-generator: https://github.com/victronenergy/dbus_generator
 - Victron gui-v2: https://github.com/victronenergy/gui-v2
 - Victron VE.Can pinout documentation: https://www.victronenergy.com/media/pg/Venus_GX/en/connecting-supported-non-victron-products.html
+- Signal K server: https://github.com/SignalK/signalk-server
+- Signal K to NMEA 2000: https://github.com/SignalK/signalk-to-nmea2000
+- B&G Zeus3 product specifications: https://www.bandg.com/bg/type/chartplotter/bg-zeus3-9-mfdinsight/
 - Scheiber CAN/NMEA gateway: https://www.scheiber.com/can-nmea?lang=en
 - canboat NMEA 2000 PGN database: https://canboat.github.io/canboat/canboat.html
 
 ## License and disclaimer
 
-Code and original documentation in this repository are provided under the MIT License. The CAN capture remains experimental data from one installation. This project is not affiliated with or endorsed by Scheiber, Victron Energy, DSD TECH, or the NMEA organization.
+Code and original documentation in this repository are provided under the MIT License. The CAN capture remains experimental data from one installation. This project is not affiliated with or endorsed by Scheiber, Victron Energy, DSD TECH, Signal K, B&G, or the NMEA organization.
 
 Generator and AC source control can create hazardous conditions. Only `0x02460B88#01/#02` has been live-validated for active use in the Cerbo bridge described here. Do not infer that other observed request/control frames are safe to transmit.
