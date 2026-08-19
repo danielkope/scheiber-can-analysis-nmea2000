@@ -899,15 +899,45 @@ class AnchorWatchService:
         else:
             self.tg.send_message(msg, reply_markup=markup)
 
+    def get_scheiber_switch(self, channel=None):
+        if not self.bus:
+            return 0
+        ch = channel or self.config.get("deck_light_channel", "deck_floodlight")
+        if isinstance(ch, int) or (isinstance(ch, str) and ch.isdigit()):
+            ch_map = {1: "electronics", 2: "deck_floodlight", 3: "deck_floodlight", 4: "lighting", 12: "lighting"}
+            ch = ch_map.get(int(ch), "deck_floodlight")
+        try:
+            import dbus
+            obj = self.bus.get_object("com.victronenergy.switch.scheiber", f"/SwitchableOutput/{ch}/State")
+            val = obj.GetValue(dbus_interface="com.victronenergy.BusItem")
+            return int(val) if val is not None else 0
+        except Exception as e:
+            log.debug(f"Failed to get Scheiber switch {ch}: {e}")
+            return 0
+
     def set_scheiber_switch(self, channel, state):
         if not self.bus:
-            return
+            return False
+        ch = channel or self.config.get("deck_light_channel", "deck_floodlight")
+        if isinstance(ch, int) or (isinstance(ch, str) and ch.isdigit()):
+            ch_map = {1: "electronics", 2: "deck_floodlight", 3: "deck_floodlight", 4: "lighting", 12: "lighting"}
+            ch = ch_map.get(int(ch), "deck_floodlight")
         try:
-            obj = self.bus.get_object("com.victronenergy.switch.scheiber", f"/{channel}/State")
-            obj.SetValue(int(state), dbus_interface="com.victronenergy.BusItem")
-            log.info(f"Set Scheiber switch channel {channel} -> {state}")
+            import dbus
+            obj = self.bus.get_object("com.victronenergy.switch.scheiber", f"/SwitchableOutput/{ch}/State")
+            obj.SetValue(dbus.Int32(int(state)), dbus_interface="com.victronenergy.BusItem")
+            log.info(f"Set Scheiber switch {ch} -> {state}")
+            return True
         except Exception as e:
-            log.error(f"Failed to set Scheiber switch {channel}: {e}")
+            log.error(f"Failed to set Scheiber switch {ch}: {e}")
+            return False
+
+    def toggle_scheiber_switch(self, channel=None):
+        ch = channel or self.config.get("deck_light_channel", "deck_floodlight")
+        cur = self.get_scheiber_switch(ch)
+        new_state = 0 if cur == 1 else 1
+        self.set_scheiber_switch(ch, new_state)
+        return new_state
 
     def render_map(self):
         if not self.armed or not self.anchor_lat or not self.anchor_lon:
@@ -929,6 +959,8 @@ class AnchorWatchService:
         )
 
     def build_quick_menu(self):
+        deck_state = self.get_scheiber_switch(self.config.get("deck_light_channel", "deck_floodlight"))
+        deck_btn_text = "💡 Deck Lights (ON)" if deck_state == 1 else "💡 Deck Lights (OFF)"
         return {
             "inline_keyboard": [
                 [
@@ -945,7 +977,7 @@ class AnchorWatchService:
                 ],
                 [
                     {"text": "📊 Status & Map", "callback_data": "status"},
-                    {"text": "💡 Deck Lights", "callback_data": "toggle_deck"}
+                    {"text": deck_btn_text, "callback_data": "toggle_deck"}
                 ],
                 [
                     {"text": "❌ Disarm Alarm", "callback_data": "disarm"}
@@ -1097,11 +1129,13 @@ class AnchorWatchService:
                 self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "toggle_deck":
-            self.set_scheiber_switch(self.config.get("deck_light_channel", 3), 1)
-            self.tg.send_message("💡 <b>Deck Floodlights Turned ON.</b>", reply_markup=self.build_quick_menu(), chat_id=chat_id)
+            new_state = self.toggle_scheiber_switch(self.config.get("deck_light_channel", "deck_floodlight"))
+            state_text = "Turned ON" if new_state == 1 else "Turned OFF"
+            icon = "💡" if new_state == 1 else "🌑"
+            self.tg.send_message(f"{icon} <b>Deck Floodlights {state_text}.</b>", reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "deck_on":
-            self.set_scheiber_switch(self.config.get("deck_light_channel", 3), 1)
+            self.set_scheiber_switch(self.config.get("deck_light_channel", "deck_floodlight"), 1)
             self.tg.send_message("💡 <b>Deck Floodlights ON.</b>", reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "silence_15":
