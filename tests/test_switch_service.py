@@ -36,6 +36,13 @@ class SwitchProtocolTests(unittest.TestCase):
             output = protocol.OUTPUT_BY_NUMBER[number]
             self.assertEqual((output.key_code, output.state_can_id, output.state_slot), values)
 
+    def test_water_pump_is_enable_toggle_not_auto_mode(self):
+        water = protocol.CHANNEL_BY_ID["fresh_water_pump"]
+        self.assertEqual(water.ui_type, protocol.UI_TYPE_TOGGLE)
+        self.assertFalse(water.persisted_auto)
+        self.assertEqual(water.output, 10)
+        self.assertEqual(water.running_signal, "fresh_water_pump_running")
+
     def test_state_frame_layout(self):
         decoded = protocol.decode_output_state(0x02201808, bytes.fromhex("0000010100000000"))
         self.assertEqual(decoded, {11: True, 12: False})
@@ -77,6 +84,15 @@ class SwitchProtocolTests(unittest.TestCase):
         self.assertEqual(protocol.bilge_mode(True, True), protocol.MODE_MANUAL)
         self.assertEqual(protocol.bilge_mode(False, True), protocol.MODE_INVALID)
         self.assertEqual(protocol.bilge_mode(None, False), protocol.MODE_UNKNOWN)
+
+    def test_bilge_native_state_is_mode_plus_activity_lamp(self):
+        self.assertEqual(protocol.bilge_mode_to_dbus(protocol.MODE_OFF, False), (0, 0))
+        self.assertEqual(protocol.bilge_mode_to_dbus(protocol.MODE_AUTO, False), (0, 1))
+        self.assertEqual(protocol.bilge_mode_to_dbus(protocol.MODE_AUTO, True), (1, 1))
+        self.assertEqual(protocol.bilge_mode_to_dbus(protocol.MODE_MANUAL, False), (1, 0))
+        self.assertEqual(protocol.bilge_mode_to_dbus(protocol.MODE_MANUAL, True), (1, 0))
+        # Unexpected activity while OFF is deliberately visible on the ON lamp.
+        self.assertEqual(protocol.bilge_mode_to_dbus(protocol.MODE_OFF, True), (1, 0))
 
     def test_every_bilge_transition_has_safe_intermediates(self):
         channel = protocol.CHANNEL_BY_ID["bilge_port"]
@@ -158,6 +174,10 @@ class RuntimeSourceTests(unittest.TestCase):
         self.assertIn("bilge_port_running", source)
         self.assertIn("bilge_starboard_running", source)
         self.assertIn("fresh_water_pump_running", source)
+        self.assertIn("Fresh Water Pump Activity", source)
+        self.assertIn("Port Bilge Pump Activity", source)
+        self.assertIn('Settings/PrimaryLabel", "Motor"', source)
+        self.assertIn("bilge_mode_to_dbus(mode, running=bool(running))", source)
 
     def test_python_sources_compile(self):
         subprocess.run(
@@ -191,6 +211,8 @@ class RuntimeSourceTests(unittest.TestCase):
         self.assertIn("Never assume OFF", source)
         self.assertIn("Node-RED", source)
         self.assertIn("Do not automatically stop", source)
+        self.assertIn("Auto + On", source)
+        self.assertIn("pressure system is enabled", source)
 
 
 if __name__ == "__main__":
