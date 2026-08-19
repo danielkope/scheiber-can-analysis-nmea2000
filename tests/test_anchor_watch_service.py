@@ -129,3 +129,18 @@ def test_rode_and_radius_adjustments():
     # Decrease radius
     svc.handle_callback_query({"data": "radius_minus", "message": {"chat": {"id": 12345}}})
     assert svc.alarm_radius_m == 45.0
+
+
+def test_drop_current_projects_ahead():
+    svc = aws.AnchorWatchService(config_path="/tmp/nonexistent_config.json")
+    svc.current_lat = 43.5000
+    svc.current_lon = 16.2000
+    svc.current_heading = 0.0 # North
+    svc.rode_m = 50.0
+
+    # Tapping Drop Anchor should project anchor 50m North
+    svc.handle_callback_query({"data": "drop_current", "message": {"chat": {"id": 12345}}})
+    assert svc.armed is True
+    assert svc.anchor_lat > 43.5000 # North of boat
+    dist = aws.haversine_distance_m(43.5000, 16.2000, svc.anchor_lat, svc.anchor_lon)
+    assert dist == pytest.approx(50.0, abs=0.5)

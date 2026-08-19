@@ -856,24 +856,36 @@ class AnchorWatchService:
         data = query.get("data", "")
         chat_id = query.get("message", {}).get("chat", {}).get("id")
 
-        if data in ("drop_current", "drop_35"):
-            self.poll_sensors()
-            if self.current_lat and self.current_lon:
-                self.arm_anchor_point(self.current_lat, self.current_lon, rode_m=self.rode_m)
-                msg = f"⚓ <b>Anchor Dropped at Current GPS!</b>\n• Rode Length: <b>{self.rode_m:.0f} m</b>\n• Alarm Radius: <b>{self.alarm_radius_m:.0f} m</b>"
+        if data in ("drop_current", "drop_35", "set_anchor"):
+            ok, res = self.reset_to_heading()
+            if ok:
+                lat, lon, d, r, hdg = res
+                msg = (
+                    f"⚓ <b>Anchor Dropped & Watch Armed!</b>\n\n"
+                    f"• <b>Bow Heading:</b> {hdg:.0f}°\n"
+                    f"• <b>Chain Rode:</b> {d:.0f} m ahead\n"
+                    f"• <b>Safe Alarm Radius:</b> {r:.0f} m\n"
+                    f"• <b>Anchor GPS:</b> <code>{lat:.5f}°, {lon:.5f}°</code>"
+                )
                 png = self.render_map()
                 if png:
                     self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
                     return
             else:
-                msg = "❌ GPS position not available."
+                msg = f"❌ Failed to set anchor: {res}"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "reset_heading":
             ok, res = self.reset_to_heading()
             if ok:
                 lat, lon, d, r, hdg = res
-                msg = f"🔄 <b>Anchor Reset to Heading {hdg:.0f}°!</b>\n• Chain Distance: <b>{d:.0f} m</b>\n• Alarm Radius: <b>{r:.0f} m</b>\n• Anchor GPS: <code>{lat:.5f}°, {lon:.5f}°</code>"
+                msg = (
+                    f"🔄 <b>Anchor Point Re-centered!</b>\n\n"
+                    f"• <b>Bow Heading:</b> {hdg:.0f}°\n"
+                    f"• <b>Chain Rode:</b> {d:.0f} m ahead\n"
+                    f"• <b>Safe Alarm Radius:</b> {r:.0f} m\n"
+                    f"• <b>Anchor GPS:</b> <code>{lat:.5f}°, {lon:.5f}°</code>"
+                )
                 png = self.render_map()
                 if png:
                     self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
