@@ -7,10 +7,9 @@ Features:
   3. Continuous Breadcrumb Track & Wind (TWS/TWD) History Recording.
   4. Real-time NMEA 2000 listener (Wind PGN 130306, Depth PGN 128267, Heading PGN 127250, GPS PGN 129029).
   5. Multi-Sensor Alarms: Anchor Drag, Squall / High Wind, Wind Shift, Shallow Water, and Low Battery.
-  6. High-Volume Synthesized Marine Audio Sirens & Klaxons via Telegram sendAudio.
-  7. Interactive Telegram Bot with real-time settings menu, per-alarm toggles, threshold adjustments, and baseline TWD reset.
-  8. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD multi-hour time-series plot.
-  9. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
+  6. Interactive Telegram Bot with real-time settings menu, per-alarm toggles, threshold adjustments, and baseline TWD reset.
+  7. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD multi-hour time-series plot.
+  8. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
 """
 
 import os
@@ -20,9 +19,8 @@ import math
 import json
 import uuid
 import io
-import wave
-import struct
 import socket
+import struct
 import threading
 import logging
 import urllib.request
@@ -53,7 +51,6 @@ DEFAULT_CONFIG = {
     "alarm_wind_shift_enabled": True,
     "alarm_depth_enabled": True,
     "alarm_battery_enabled": True,
-    "sound_alerts_enabled": True,
     # Alarm Thresholds
     "depth_alarm_threshold_m": 2.5,
     "wind_squall_gust_kn": 25.0,
@@ -120,61 +117,6 @@ def wind_direction_cardinal(deg):
                  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
     idx = int((deg + 11.25) / 22.5) % 16
     return cardinals[idx]
-
-
-def generate_alarm_audio(sound_type="drag", duration_s=3.5, sample_rate=22050):
-    """Generate high-volume synthesized marine alarm audio in WAV format."""
-    num_samples = int(duration_s * sample_rate)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wav:
-        wav.setnchannels(1)  # Mono
-        wav.setsampwidth(2)  # 16-bit
-        wav.setframerate(sample_rate)
-        frames = bytearray()
-
-        for i in range(num_samples):
-            t = i / sample_rate
-
-            if sound_type == "drag":
-                # Urgent Two-Tone Nautical Siren (880Hz <-> 659Hz every 0.25s) with rich harmonics
-                f = 880.0 if (int(t * 4) % 2 == 0) else 659.0
-                sample = (0.65 * math.sin(2 * math.pi * f * t) +
-                          0.25 * math.sin(2 * math.pi * 3 * f * t) +
-                          0.10 * math.sin(2 * math.pi * 5 * f * t))
-
-            elif sound_type == "squall":
-                # Pulsing High-Wind Klaxon (3 rapid bursts per sec at 550Hz + 1100Hz)
-                cycle_t = t % 0.33
-                if cycle_t < 0.20:
-                    sample = 0.70 * math.sin(2 * math.pi * 550.0 * t) + 0.30 * math.sin(2 * math.pi * 1100.0 * t)
-                else:
-                    sample = 0.0
-
-            elif sound_type == "depth":
-                # Rapid Descending Sonar Ping (1400Hz -> 500Hz per 0.4s)
-                cycle_t = t % 0.40
-                if cycle_t < 0.25:
-                    sweep_f = 1400.0 - (cycle_t / 0.25) * 900.0
-                    decay = math.exp(-cycle_t * 6.0)
-                    sample = decay * (0.80 * math.sin(2 * math.pi * sweep_f * t) + 0.20 * math.sin(2 * math.pi * 2 * sweep_f * t))
-                else:
-                    sample = 0.0
-
-            elif sound_type == "wind_shift":
-                # Double Nautical Bell Chime (784Hz + 1046Hz decaying chime)
-                cycle_t = t % 1.0
-                decay = math.exp(-cycle_t * 4.0)
-                sample = decay * (0.50 * math.sin(2 * math.pi * 784.0 * t) + 0.50 * math.sin(2 * math.pi * 1046.0 * t))
-
-            else:
-                sample = 0.70 * math.sin(2 * math.pi * 440.0 * t)
-
-            # Max amplitude scaling with saturation limit
-            val = int(max(-32767, min(32767, sample * 32760)))
-            frames.extend(struct.pack('<h', val))
-
-        wav.writeframes(frames)
-    return buf.getvalue()
 
 
 def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, current_lat, current_lon,
@@ -763,56 +705,6 @@ class TelegramClient:
             log.error(f"Failed to send Telegram photo: {e}")
             return None
 
-    def send_audio(self, audio_bytes, title="🚨 Anchor Alarm", performer="Cerbo GX", caption="", reply_markup=None, chat_id=None):
-        target_chat = chat_id or self.default_chat_id
-        if not self.token or not target_chat:
-            return None
-
-        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
-        body = bytearray()
-
-        body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        body.extend(f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{target_chat}\r\n'.encode("utf-8"))
-
-        if title:
-            body.extend(f"--{boundary}\r\n".encode("utf-8"))
-            body.extend(f'Content-Disposition: form-data; name="title"\r\n\r\n{title}\r\n'.encode("utf-8"))
-
-        if performer:
-            body.extend(f"--{boundary}\r\n".encode("utf-8"))
-            body.extend(f'Content-Disposition: form-data; name="performer"\r\n\r\n{performer}\r\n'.encode("utf-8"))
-
-        if caption:
-            body.extend(f"--{boundary}\r\n".encode("utf-8"))
-            body.extend(f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'.encode("utf-8"))
-            body.extend(f"--{boundary}\r\n".encode("utf-8"))
-            body.extend(b'Content-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n')
-
-        if reply_markup:
-            body.extend(f"--{boundary}\r\n".encode("utf-8"))
-            body.extend(f'Content-Disposition: form-data; name="reply_markup"\r\n\r\n{json.dumps(reply_markup)}\r\n'.encode("utf-8"))
-
-        body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        body.extend(b'Content-Disposition: form-data; name="audio"; filename="alarm.wav"\r\n')
-        body.extend(b"Content-Type: audio/wav\r\n\r\n")
-        body.extend(audio_bytes)
-        body.extend(b"\r\n")
-
-        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
-
-        url = f"{self.base_url}/sendAudio"
-        try:
-            req = urllib.request.Request(
-                url,
-                data=bytes(body),
-                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            log.error(f"Failed to send Telegram audio: {e}")
-            return None
-
     def get_updates(self, offset=None, timeout=10):
         if not self.token:
             return []
@@ -1146,14 +1038,6 @@ class AnchorWatchService:
             ]
         }
 
-        # Send loud emergency audio siren if sound alerts enabled
-        if self.config.get("sound_alerts_enabled", True):
-            try:
-                audio = generate_alarm_audio("drag")
-                self.tg.send_audio(audio, title="🚨 ANCHOR DRAG LOUD ALARM", performer="Cerbo GX Siren")
-            except Exception as e:
-                log.debug(f"Could not send alarm audio: {e}")
-
         png = self.render_map()
         if png:
             self.tg.send_photo(png, caption=msg, reply_markup=markup)
@@ -1173,13 +1057,6 @@ class AnchorWatchService:
             f"🔋 <b>Battery:</b> {self.current_soc or 0:.0f}% SoC\n\n"
             f"📍 <a href='{map_url}'>Open Google Maps</a>"
         )
-        if self.config.get("sound_alerts_enabled", True):
-            try:
-                audio = generate_alarm_audio("squall")
-                self.tg.send_audio(audio, title="💨 SQUALL WARNING KLAXON", performer="Cerbo GX Siren")
-            except Exception:
-                pass
-
         png = self.render_map()
         if png:
             self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu())
@@ -1200,13 +1077,6 @@ class AnchorWatchService:
             f"<i>Check lee shore proximity, swing clearance, and swell.</i>\n"
             f"📍 <a href='{map_url}'>Open Google Maps</a>"
         )
-        if self.config.get("sound_alerts_enabled", True):
-            try:
-                audio = generate_alarm_audio("wind_shift")
-                self.tg.send_audio(audio, title="🔄 WIND SHIFT CHIME", performer="Cerbo GX Chime")
-            except Exception:
-                pass
-
         png = self.render_map()
         if png:
             self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu())
@@ -1223,13 +1093,6 @@ class AnchorWatchService:
             f"📍 <b>Position:</b> <code>{self.current_lat or 0:.5f}°, {self.current_lon or 0:.5f}°</code>\n\n"
             f"📍 <a href='{map_url}'>Open Google Maps</a>"
         )
-        if self.config.get("sound_alerts_enabled", True):
-            try:
-                audio = generate_alarm_audio("depth")
-                self.tg.send_audio(audio, title="🌊 SHALLOW WATER SONAR PING", performer="Cerbo GX Sounder")
-            except Exception:
-                pass
-
         self.tg.send_message(msg, reply_markup=self.build_quick_menu())
 
     def trigger_battery_alarm(self, soc_pct, threshold):
@@ -1338,7 +1201,6 @@ class AnchorWatchService:
         shift_on = self.config.get("alarm_wind_shift_enabled", True)
         depth_on = self.config.get("alarm_depth_enabled", True)
         battery_on = self.config.get("alarm_battery_enabled", True)
-        sound_on = self.config.get("sound_alerts_enabled", True)
 
         squall_val = float(self.config.get("wind_squall_gust_kn", 25.0))
         shift_val = float(self.config.get("wind_shift_threshold_deg", 60.0))
@@ -1377,9 +1239,6 @@ class AnchorWatchService:
                     {"text": "➕ 5%", "callback_data": "bat_plus"}
                 ],
                 [
-                    {"text": f"🔊 Loud Siren Audio: {'🟢 ON' if sound_on else '⚪ OFF'}", "callback_data": "toggle_sound"}
-                ],
-                [
                     {"text": "⬅️ Back to Main Menu", "callback_data": "main_menu"}
                 ]
             ]
@@ -1391,7 +1250,6 @@ class AnchorWatchService:
         shift_on = "🟢 ON" if self.config.get("alarm_wind_shift_enabled", True) else "⚪ OFF"
         depth_on = "🟢 ON" if self.config.get("alarm_depth_enabled", True) else "⚪ OFF"
         battery_on = "🟢 ON" if self.config.get("alarm_battery_enabled", True) else "⚪ OFF"
-        sound_on = "🟢 ON" if self.config.get("sound_alerts_enabled", True) else "⚪ OFF"
 
         squall_val = float(self.config.get("wind_squall_gust_kn", 25.0))
         shift_val = float(self.config.get("wind_shift_threshold_deg", 60.0))
@@ -1408,8 +1266,7 @@ class AnchorWatchService:
             f"• 💨 <b>Squall Alarm:</b> {squall_on} (Limit: <b>{squall_val:.0f} kn</b>)\n"
             f"• 🔄 <b>Wind Shift:</b> {shift_on} (Sector: <b>±{shift_val:.0f}°</b> | Baseline: <b>{base_twd}</b>)\n"
             f"• 🌊 <b>Shallow Water:</b> {depth_on} (Limit: <b>{depth_val:.1f} m</b>)\n"
-            f"• 🔋 <b>Low Battery:</b> {battery_on} (Limit: <b>{bat_val:.0f}%</b>)\n"
-            f"• 🔊 <b>Loud Siren Audio:</b> {sound_on}\n\n"
+            f"• 🔋 <b>Low Battery:</b> {battery_on} (Limit: <b>{bat_val:.0f}%</b>)\n\n"
             f"<i>Use the controls below to toggle alarms or adjust limits:</i>"
         )
         return msg
@@ -1670,11 +1527,6 @@ class AnchorWatchService:
 
         elif data == "bat_minus":
             self.config["battery_low_soc_pct"] = max(5.0, float(self.config.get("battery_low_soc_pct", 20.0)) - 5.0)
-            self.save_config()
-            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
-
-        elif data == "toggle_sound":
-            self.config["sound_alerts_enabled"] = not self.config.get("sound_alerts_enabled", True)
             self.save_config()
             self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
 

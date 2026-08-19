@@ -207,16 +207,11 @@ def test_depth_alarm_trigger():
     # Shallow depth (2.1m)
     svc.current_depth = 2.1
     svc.check_geofence()
+    # Shallow depth (2.1m)
+    svc.current_depth = 2.1
+    svc.check_geofence()
     assert len(depth_events) == 1
     assert depth_events[0][0] == 2.1
-
-
-def test_alarm_sound_generation():
-    for st in ("drag", "squall", "depth", "wind_shift"):
-        wav_data = aws.generate_alarm_audio(st, duration_s=1.0)
-        assert len(wav_data) > 1000
-        assert wav_data[:4] == b"RIFF"
-        assert wav_data[8:12] == b"WAVE"
 
 
 def test_settings_menu_and_per_alarm_toggles():
@@ -265,4 +260,3 @@ def test_settings_menu_and_per_alarm_toggles():
     assert any("Reset Baseline TWD" in b for b in buttons)
     assert any("Depth" in b for b in buttons)
     assert any("Battery" in b for b in buttons)
-    assert any("Siren" in b for b in buttons)
