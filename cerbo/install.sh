@@ -6,8 +6,11 @@ set -eu
 APP_DIR="${APP_DIR:-/data/scheiber-gx}"
 SERVICE_LINK="${SERVICE_LINK:-/service/scheiber-gx}"
 SWITCH_SERVICE_LINK="${SWITCH_SERVICE_LINK:-/service/scheiber-switch}"
-CAN_IF="${CAN_IF:-can2}"
+CAN_IF="${CAN_IF:-auto}"
 CAN_BITRATE="${CAN_BITRATE:-250000}"
+CAN_USB_SERIAL="${CAN_USB_SERIAL:-}"
+CAN_USB_VENDOR_ID="${CAN_USB_VENDOR_ID:-}"
+CAN_USB_PRODUCT_ID="${CAN_USB_PRODUCT_ID:-}"
 SWITCH_TX_ENABLED="${SWITCH_TX_ENABLED:-1}"
 SWITCH_RTR_ENABLED="${SWITCH_RTR_ENABLED:-1}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
@@ -26,6 +29,15 @@ for cmd in python3 ip sha256sum ln chmod mkdir mv cp rm grep awk; do
     }
 done
 
+case "$CAN_IF" in
+    ""|*[!A-Za-z0-9_.:-]*)
+        echo "ERROR: CAN_IF must be 'auto' or a valid interface name." >&2
+        exit 1
+        ;;
+esac
+case "$CAN_BITRATE" in
+    ""|*[!0-9]*) echo "ERROR: CAN_BITRATE must be numeric." >&2; exit 1 ;;
+esac
 case "$SWITCH_TX_ENABLED" in 0|1) ;; *) echo "ERROR: SWITCH_TX_ENABLED must be 0 or 1." >&2; exit 1 ;; esac
 case "$SWITCH_RTR_ENABLED" in 0|1) ;; *) echo "ERROR: SWITCH_RTR_ENABLED must be 0 or 1." >&2; exit 1 ;; esac
 
@@ -54,6 +66,7 @@ fetch_file() {
 
 # Fetch and validate every runtime file before replacing the installed service.
 fetch_file "bridge.py" "$STAGE/bridge.py"
+fetch_file "resolve_can_interface.py" "$STAGE/resolve_can_interface.py"
 fetch_file "service/run" "$STAGE/run-main"
 fetch_file "scheiber_switch_protocol.py" "$STAGE/scheiber_switch_protocol.py"
 fetch_file "switch_service.py" "$STAGE/switch_service.py"
@@ -61,6 +74,7 @@ fetch_file "service-switch/run" "$STAGE/run-switch"
 
 python3 -m py_compile \
     "$STAGE/bridge.py" \
+    "$STAGE/resolve_can_interface.py" \
     "$STAGE/scheiber_switch_protocol.py" \
     "$STAGE/switch_service.py"
 
@@ -70,6 +84,45 @@ if [ "$actual_bridge_sha" != "$EXPECTED_BRIDGE_SHA256" ]; then
     echo "Expected: $EXPECTED_BRIDGE_SHA256" >&2
     echo "Actual:   $actual_bridge_sha" >&2
     exit 1
+fi
+
+# Best-effort install-time discovery. The runit service repeats this operation
+# on every boot, so a temporarily disconnected adapter does not block updates.
+modprobe can 2>/dev/null || true
+modprobe can_raw 2>/dev/null || true
+modprobe gs_usb 2>/dev/null || true
+resolved_can_if=""
+if resolved_can_if="$(
+    python3 "$STAGE/resolve_can_interface.py" \
+        --interface "$CAN_IF" \
+        --usb-serial "$CAN_USB_SERIAL" \
+        --vendor-id "$CAN_USB_VENDOR_ID" \
+        --product-id "$CAN_USB_PRODUCT_ID"
+)"; then
+    if [ -z "$CAN_USB_SERIAL" ]; then
+        CAN_USB_SERIAL="$(
+            python3 "$STAGE/resolve_can_interface.py" \
+                --interface "$resolved_can_if" \
+                --field serial
+        )"
+        [ -z "$CAN_USB_SERIAL" ] || echo "Auto-enrolled CAN USB serial: $CAN_USB_SERIAL"
+    fi
+    if [ -z "$CAN_USB_VENDOR_ID" ]; then
+        CAN_USB_VENDOR_ID="$(
+            python3 "$STAGE/resolve_can_interface.py" \
+                --interface "$resolved_can_if" \
+                --field vendor
+        )"
+    fi
+    if [ -z "$CAN_USB_PRODUCT_ID" ]; then
+        CAN_USB_PRODUCT_ID="$(
+            python3 "$STAGE/resolve_can_interface.py" \
+                --interface "$resolved_can_if" \
+                --field product
+        )"
+    fi
+else
+    echo "WARNING: CAN adapter is not currently resolvable; runit will retry at boot." >&2
 fi
 
 # Refuse to replace unrelated runit entries.
@@ -95,17 +148,19 @@ if [ -f "$APP_DIR/bridge.py" ]; then
     install_mode="update"
     cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
 fi
-for file in scheiber_switch_protocol.py switch_service.py; do
+for file in resolve_can_interface.py scheiber_switch_protocol.py switch_service.py; do
     [ ! -f "$APP_DIR/$file" ] || cp "$APP_DIR/$file" "$APP_DIR/$file.previous"
 done
 
 mv "$STAGE/bridge.py" "$APP_DIR/bridge.py"
+mv "$STAGE/resolve_can_interface.py" "$APP_DIR/resolve_can_interface.py"
 mv "$STAGE/scheiber_switch_protocol.py" "$APP_DIR/scheiber_switch_protocol.py"
 mv "$STAGE/switch_service.py" "$APP_DIR/switch_service.py"
 mv "$STAGE/run-main" "$APP_DIR/service/run"
 mv "$STAGE/run-switch" "$APP_DIR/service-switch/run"
 chmod 755 \
     "$APP_DIR/bridge.py" \
+    "$APP_DIR/resolve_can_interface.py" \
     "$APP_DIR/switch_service.py" \
     "$APP_DIR/service/run" \
     "$APP_DIR/service-switch/run"
@@ -116,10 +171,15 @@ rm -rf "$STAGE"
 rm -f "$APP_DIR/assemble_bridge.py"
 rm -rf "$APP_DIR/source"
 
-echo "$CAN_IF" > "$APP_DIR/CAN_INTERFACE"
-echo "$CAN_BITRATE" > "$APP_DIR/CAN_BITRATE"
-echo "$SWITCH_TX_ENABLED" > "$APP_DIR/SWITCH_TX_ENABLED"
-echo "$SWITCH_RTR_ENABLED" > "$APP_DIR/SWITCH_RTR_ENABLED"
+# CAN_INTERFACE is now a selector ('auto' is preferred), not necessarily the
+# boot-specific canN name. The resolved name is written to /run at service start.
+printf '%s\n' "$CAN_IF" > "$APP_DIR/CAN_INTERFACE"
+printf '%s\n' "$CAN_BITRATE" > "$APP_DIR/CAN_BITRATE"
+printf '%s\n' "$CAN_USB_SERIAL" > "$APP_DIR/CAN_USB_SERIAL"
+printf '%s\n' "$CAN_USB_VENDOR_ID" > "$APP_DIR/CAN_USB_VENDOR_ID"
+printf '%s\n' "$CAN_USB_PRODUCT_ID" > "$APP_DIR/CAN_USB_PRODUCT_ID"
+printf '%s\n' "$SWITCH_TX_ENABLED" > "$APP_DIR/SWITCH_TX_ENABLED"
+printf '%s\n' "$SWITCH_RTR_ENABLED" > "$APP_DIR/SWITCH_RTR_ENABLED"
 
 RC_LOCAL="/data/rc.local"
 MAIN_MARKER="# scheiber-gx persistent runit service"
@@ -159,7 +219,11 @@ Scheiber GX services installed.
   app:              $APP_DIR
   telemetry:        $SERVICE_LINK
   native switches:  $SWITCH_SERVICE_LINK
-  CAN:              $CAN_IF @ $CAN_BITRATE bit/s
+  CAN selector:     $CAN_IF
+  CAN detected now: ${resolved_can_if:-pending}
+  CAN USB serial:   ${CAN_USB_SERIAL:-not pinned}
+  CAN USB ID:       ${CAN_USB_VENDOR_ID:-*}:${CAN_USB_PRODUCT_ID:-*}
+  CAN bitrate:      $CAN_BITRATE bit/s
   switch CAN TX:    $SWITCH_TX_ENABLED
   switch RTR sync:  $SWITCH_RTR_ENABLED
   bridge SHA-256:   $actual_bridge_sha
@@ -168,7 +232,7 @@ Scheiber GX services installed.
   switch status:    $APP_DIR/switch-status.json
 
 Next checks:
-  ip -details -statistics link show $CAN_IF
+  cat /run/scheiber-can-if 2>/dev/null || true
   sv status $SERVICE_LINK $SWITCH_SERVICE_LINK
   tail -n 100 $APP_DIR/switch.log
   dbus -y com.victronenergy.switch.scheiber /Connected GetValue
