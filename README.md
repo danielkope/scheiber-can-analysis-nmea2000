@@ -10,6 +10,7 @@ Reverse-engineering notes, evidence, tools, and reproducible integration work fo
 - A pure-Python decoder and CSV/JSON report generator.
 - A context-aware passive generator lifecycle state machine.
 - A tested Victron Cerbo GX connected-genset bridge with runit installer, rollback path, D-Bus integration, tanks, batteries, and diagnostics.
+- A native Cerbo GX **Smart Anchor Watch & Alarm Service** with geodesic projection, multi-hour Cairo vector chart & wind strip plot rendering, multi-sensor marine alarms, Scheiber deck light automation, and interactive Telegram control ([`docs/ANCHOR_WATCH.md`](docs/ANCHOR_WATCH.md)).
 - A live-validated Signal K -> NMEA 2000 tank path using PGN 127505, including B&G Zeus3 compatibility guidance.
 - Wiring/setup instructions for the SH-C30A on Raspberry Pi and Cerbo GX.
 - A mapping register with datatypes, endianness, scales, offsets, units, observed ranges, confidence, and proposed NMEA 2000 PGNs.
