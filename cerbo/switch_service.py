@@ -74,7 +74,7 @@ from scheiber_switch_protocol import (  # noqa: E402
 
 DBusGMainLoop(set_as_default=True)
 
-SERVICE_VERSION = "0.1.0"
+SERVICE_VERSION = "0.1.1"
 SERVICE_NAME = "com.victronenergy.switch.scheiber"
 DEVICE_INSTANCE = 55
 PRODUCT_ID = 0xFFFF
@@ -118,9 +118,9 @@ CAN_FRAME = struct.Struct("=IB3x8s")
 FILTER_IDS = (PANEL_ALIVE_ID, DIGITAL_INPUT_ID, *STATE_IDS, SWITCH_EVENT_ID)
 
 RUNNING_INPUTS = (
-    ("fresh_water_pump_running", "Fresh Water Pump Running", "Pumps"),
-    ("bilge_port_running", "Port Bilge Pump Running", "Pumps"),
-    ("bilge_starboard_running", "Starboard Bilge Pump Running", "Pumps"),
+    ("fresh_water_pump_running", "Fresh Water Pump Activity", "Pumps", ["Standby", "ACTIVE"]),
+    ("bilge_port_running", "Port Bilge Pump Activity", "Pumps", ["Stopped", "RUNNING"]),
+    ("bilge_starboard_running", "Starboard Bilge Pump Activity", "Pumps", ["Stopped", "RUNNING"]),
 )
 
 
@@ -305,7 +305,7 @@ class ScheiberSwitchService:
             service.add_path(f"{base}/Scheiber/CommandPending", 0)
             service.add_path(f"{base}/Scheiber/LastCommandError", "")
 
-        for signal_name, display_name, group in RUNNING_INPUTS:
+        for signal_name, display_name, group, labels in RUNNING_INPUTS:
             base = self.input_base(signal_name)
             service.add_path(f"{base}/Name", display_name)
             service.add_path(f"{base}/Value", 0)
@@ -315,7 +315,8 @@ class ScheiberSwitchService:
             service.add_path(f"{base}/Settings/ShowUIInput", 1)
             service.add_path(f"{base}/Settings/Type", GENERIC_INPUT_TYPE_DISCRETE)
             service.add_path(f"{base}/Settings/ValidTypes", 1)
-            service.add_path(f"{base}/Settings/Labels", ["Not running", "Running"])
+            service.add_path(f"{base}/Settings/PrimaryLabel", "Motor")
+            service.add_path(f"{base}/Settings/Labels", labels)
             service.add_path(f"{base}/Settings/Invert", 0)
             service.add_path(f"{base}/Settings/DigitalInputMode", GENERIC_DIGITAL_INPUT_MODE_ON_OFF)
 
@@ -360,38 +361,35 @@ class ScheiberSwitchService:
         if requested not in (0, 1):
             return self.reject(channel_id, "Auto must be 0 or 1")
         channel = CHANNEL_BY_ID[channel_id]
-        if channel.persisted_auto:
-            self.auto_preferences[channel_id] = bool(requested)
-            self.save_settings()
-            self.last_command_error[channel_id] = ""
-            self.log(f"Automation ownership {channel_id} -> {'AUTO' if requested else 'MANUAL'}")
-            return True
-        if channel.kind != KIND_BILGE:
-            return self.reject(channel_id, "Auto is unsupported for this channel")
-        return self.request_bilge(channel, MODE_AUTO if requested else MODE_OFF)
-
-    def validate_command(self, channel: Channel) -> bool:
-        if not self.connected:
-            return self.reject(channel.channel_id, "panel is not connected")
-        if not self.model.channel_known(channel):
-            return self.reject(channel.channel_id, "physical state is UNKNOWN; wait for CAN synchronization")
-        if self.pending is not None:
-            return self.reject(channel.channel_id, f"command in progress for {self.pending.channel_id}")
+        if channel.kind == KIND_BILGE:
+            return self.request_bilge(channel, MODE_AUTO if requested else MODE_OFF)
+        if not channel.persisted_auto:
+            return self.reject(channel_id, "Auto is not supported for this channel")
+        self.auto_preferences[channel_id] = bool(requested)
+        self.save_settings()
+        self.last_command_error[channel_id] = ""
+        self.log(f"Auto ownership for {channel_id} -> {requested}")
+        self.refresh_dbus()
         return True
 
     def request_binary(self, channel: Channel, target: bool) -> bool:
-        if not self.validate_command(channel):
-            return False
+        if self.pending is not None:
+            return self.reject(channel.channel_id, f"another command is pending ({self.pending.channel_id})")
+        if not self.connected or not self.model.channel_known(channel):
+            return self.reject(channel.channel_id, "physical state is UNKNOWN")
         try:
             steps = plan_binary(channel, self.model.binary_state(channel), target)
         except (UnknownStateError, InvalidStateError, ValueError) as exc:
             return self.reject(channel.channel_id, str(exc))
+        target_state = int(bool(target))
         target_auto = int(self.auto_preferences.get(channel.channel_id, False)) if channel.persisted_auto else None
-        return self.begin_command(channel, int(target), target_auto, steps)
+        return self.begin_command(channel, target_state, target_auto, steps)
 
     def request_bilge(self, channel: Channel, target_mode: str) -> bool:
-        if not self.validate_command(channel):
-            return False
+        if self.pending is not None:
+            return self.reject(channel.channel_id, f"another command is pending ({self.pending.channel_id})")
+        if not self.connected or not self.model.channel_known(channel):
+            return self.reject(channel.channel_id, "physical state is UNKNOWN")
         try:
             steps = plan_bilge(
                 channel,
@@ -399,23 +397,37 @@ class ScheiberSwitchService:
                 self.model.outputs[int(channel.manual_output)],
                 target_mode,
             )
-            target_state, target_auto = bilge_mode_to_dbus(target_mode)
         except (UnknownStateError, InvalidStateError, ValueError) as exc:
             return self.reject(channel.channel_id, str(exc))
+        target_state = 1 if target_mode == MODE_MANUAL else 0
+        target_auto = 1 if target_mode == MODE_AUTO else 0
         return self.begin_command(channel, target_state, target_auto, steps)
 
-    def begin_command(self, channel: Channel, target_state: int, target_auto: Optional[int],
-                      steps: List[CommandStep]) -> bool:
-        self.last_command_error[channel.channel_id] = ""
-        self.faulted_channels.discard(channel.channel_id)
+    def begin_command(
+        self,
+        channel: Channel,
+        target_state: int,
+        target_auto: Optional[int],
+        steps: List[CommandStep],
+    ) -> bool:
         if not steps:
-            self.log(f"No CAN command needed for {channel.channel_id}; already at target")
-            self.refresh_channel(channel)
+            self.last_command_error[channel.channel_id] = ""
+            self.faulted_channels.discard(channel.channel_id)
+            self.refresh_dbus()
             return True
         if not TX_ENABLED:
-            return self.reject(channel.channel_id, "CAN transmission is disabled")
-        self.pending = PendingCommand(channel.channel_id, target_state, target_auto, steps, time.monotonic())
+            return self.reject(channel.channel_id, "CAN command transmission is disabled")
+        self.pending = PendingCommand(
+            channel.channel_id,
+            target_state,
+            target_auto,
+            steps,
+            time.monotonic(),
+        )
+        self.last_command_error[channel.channel_id] = ""
+        self.faulted_channels.discard(channel.channel_id)
         self.update_pending_paths()
+        self.write_status()
         return self.start_pending_step()
 
     def reject(self, channel_id: str, reason: str) -> bool:
@@ -701,17 +713,17 @@ class ScheiberSwitchService:
         mode = self.model.bilge_mode(channel)
         self.service[f"{base}/Scheiber/Mode"] = mode
         if mode in (MODE_OFF, MODE_AUTO, MODE_MANUAL):
-            state, auto = bilge_mode_to_dbus(mode)
+            state, auto = bilge_mode_to_dbus(mode, running=bool(running))
             self.service[f"{base}/State"] = state
             self.service[f"{base}/Auto"] = auto
         elif mode == MODE_INVALID:
-            self.service[f"{base}/State"] = int(bool(self.model.outputs[int(channel.manual_output)]))
+            self.service[f"{base}/State"] = int(bool(running))
             self.service[f"{base}/Auto"] = 0
 
     def refresh_running_inputs(self) -> None:
         if self.service is None:
             return
-        for signal_name, _display_name, _group in RUNNING_INPUTS:
+        for signal_name, _display_name, _group, _labels in RUNNING_INPUTS:
             base = self.input_base(signal_name)
             value = self.model.running[signal_name]
             self.service[f"{base}/Value"] = int(bool(value))
