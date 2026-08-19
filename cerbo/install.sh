@@ -292,6 +292,47 @@ except Exception as e:
     fi
 done
 
+# Ensure dbus-systemcalc-py delegates/acinput.py properly distinguishes genset from grid
+if [ -f /opt/victronenergy/dbus-systemcalc-py/delegates/acinput.py ]; then
+    python3 -c "
+import re
+path = '/opt/victronenergy/dbus-systemcalc-py/delegates/acinput.py'
+try:
+    with open(path, 'r', encoding='utf-8') as f:
+        text = f.read()
+    pattern = r'(\\t+sources = zip\\([\\s\\S]*?newvalues\\[\\\'/Ac/In/NumberOfAcInputs\\\'\\] = input_count)'
+    replacement = '''\\t\\t\\tsources = [
+\\t\\t\\t\\t(s, t) for s, t in (
+\\t\\t\\t\\t\\t(self.gridmeter, 1),
+\\t\\t\\t\\t\\t(self.gensetmeter, 2)
+\\t\\t\\t\\t) if s is not None
+\\t\\t\\t]
+\\t\\t\\tfor source, t in sources:
+\\t\\t\\t\\tif t == 2:
+\\t\\t\\t\\t\\tst = self._dbusmonitor.get_value(source.service, '/StatusCode')
+\\t\\t\\t\\t\\tv = self._dbusmonitor.get_value(source.service, '/Ac/L1/Voltage')
+\\t\\t\\t\\t\\tactive = bool(st in (1, 8) or (v is not None and v > 50))
+\\t\\t\\t\\telse:
+\\t\\t\\t\\t\\tactive = bool(input_count == 0)
+\\t\\t\\t\\tnewvalues.update(self.input_tree(input_count, source.service, source.instance, t, int(active)))
+\\t\\t\\t\\tif active:
+\\t\\t\\t\\t\\tnewvalues['/Ac/ActiveIn/ServiceType'] = source.service.split(\".\")[2]
+\\t\\t\\t\\t\\tnewvalues['/Ac/ActiveIn/Source'] = t
+\\t\\t\\t\\tinput_count += 1
+\\t\\t\\tnewvalues['/Ac/In/NumberOfAcInputs'] = input_count'''
+    if re.search(pattern, text):
+        new_text = re.sub(pattern, replacement, text, count=1)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(new_text)
+except Exception:
+    pass
+" 2>/dev/null || true
+    python3 -m py_compile /opt/victronenergy/dbus-systemcalc-py/delegates/acinput.py 2>/dev/null || true
+    if [ -n "$SVC" ]; then
+        "$SVC" -t /service/dbus-systemcalc-py 2>/dev/null || true
+    fi
+fi
+
 cat <<EOF
 Scheiber GX services installed.
 
