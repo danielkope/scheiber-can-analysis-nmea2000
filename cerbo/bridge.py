@@ -86,7 +86,7 @@ SERVICE_NAME = "com.victronenergy.genset.scheiber"
 DEVICE_INSTANCE = 40
 PRODUCT_ID = 0xFFFF
 PRODUCT_NAME = "Scheiber Generator"
-BRIDGE_VERSION = "5.6.0"
+BRIDGE_VERSION = "5.7.0"
 
 LOGFILE = "/data/scheiber-gx/bridge.log"
 STATUSFILE = "/data/scheiber-gx/status.json"
@@ -408,6 +408,10 @@ class Bridge:
         self.tank_buses = {}
         self.tank_last_update = {}
 
+        # Native Victron Grid/Shore power service (receive-only).
+        self.shore_service = None
+        self.shore_bus = None
+
         # Transition tracking.  Diagnostic only: timeouts never retry commands.
         self.running_candidate_since = None
         self.pending = None
@@ -429,6 +433,7 @@ class Bridge:
         self.log("================================================")
 
         self.setup_dbus()
+        self.setup_grid_service()
         self.setup_battery_services()
         self.setup_tank_services()
         self.setup_name_owner_watch()
@@ -660,6 +665,55 @@ class Bridge:
 
         self.service.register()
         self.log("Registered {}".format(SERVICE_NAME))
+
+    def setup_grid_service(self):
+        """Create native Victron grid/shore power telemetry service (receive-only)."""
+        service_name = "com.victronenergy.grid.scheiber_shore"
+        self.shore_bus = dbus.Bus.get_system(private=True)
+        svc = VeDbusService(
+            service_name,
+            bus=self.shore_bus,
+            register=False,
+        )
+        svc.add_mandatory_paths(
+            processname=os.path.abspath(__file__),
+            processversion=BRIDGE_VERSION,
+            connection="Scheiber CAN on {}".format(CAN_IF),
+            deviceinstance=41,
+            productid=PRODUCT_ID,
+            productname="Scheiber Shore Power",
+            firmwareversion=BRIDGE_VERSION,
+            hardwareversion=None,
+            connected=0,
+        )
+        svc.add_path("/CustomName", "Shore Power")
+        svc.add_path("/Ac/NumberOfPhases", 1)
+        svc.add_path(
+            "/Ac/L1/Voltage",
+            None,
+            gettextcallback=lambda p, v: (
+                "---" if v is None else "{:.1f} V".format(float(v))
+            ),
+        )
+        svc.add_path(
+            "/Ac/L1/Current",
+            None,
+            gettextcallback=lambda p, v: (
+                "---" if v is None else "{:.1f} A".format(float(v))
+            ),
+        )
+        svc.add_path(
+            "/Ac/L1/Power",
+            None,
+            gettextcallback=lambda p, v: (
+                "---" if v is None else "{:.0f} W".format(float(v))
+            ),
+        )
+        svc.add_path("/Ac/L1/Energy/Forward", None)
+        svc.add_path("/Ac/L1/Energy/Reverse", None)
+        svc.register()
+        self.shore_service = svc
+        self.log("Registered {}".format(service_name))
 
     def setup_battery_services(self):
         """Create native Victron battery telemetry services.
@@ -914,6 +968,8 @@ class Bridge:
             svc["/Connected"] = value
         for svc in self.tank_services.values():
             svc["/Connected"] = value
+        if value == 0 and self.shore_service:
+            self.shore_service["/Connected"] = 0
 
     def update_battery_service(
         self,
@@ -1052,6 +1108,44 @@ class Bridge:
             return
 
         self.service["/Ac/L1/Voltage"] = None
+
+    def update_shore_power_publication(self):
+        """Publish shore power telemetry only when Scheiber feedback confirms SHORE is applied."""
+        if not self.shore_service:
+            return
+
+        now = time.monotonic()
+        shore_applied = (
+            self.house_panel_applied_source == SOURCE_SHORE
+            or self.ac_panel_applied_source == SOURCE_SHORE
+        )
+
+        voltage = None
+        if (
+            self.house_panel_applied_source == SOURCE_SHORE
+            and self.last_house_panel_voltage is not None
+            and self.house_panel_last_update is not None
+            and now - self.house_panel_last_update <= FAST_TELEMETRY_STALE_SECONDS
+            and 80.0 <= float(self.last_house_panel_voltage) <= 300.0
+        ):
+            voltage = float(self.last_house_panel_voltage)
+        elif (
+            self.ac_panel_applied_source == SOURCE_SHORE
+            and self.last_ac_panel_voltage is not None
+            and self.ac_panel_last_update is not None
+            and now - self.ac_panel_last_update <= FAST_TELEMETRY_STALE_SECONDS
+            and 80.0 <= float(self.last_ac_panel_voltage) <= 300.0
+        ):
+            voltage = float(self.last_ac_panel_voltage)
+
+        if shore_applied and voltage is not None:
+            self.shore_service["/Connected"] = 1
+            self.shore_service["/Ac/L1/Voltage"] = voltage
+        else:
+            self.shore_service["/Connected"] = 0
+            self.shore_service["/Ac/L1/Voltage"] = None
+            self.shore_service["/Ac/L1/Power"] = None
+            self.shore_service["/Ac/L1/Current"] = None
 
 
     # ------------------------------------------------------------------
@@ -2028,6 +2122,7 @@ class Bridge:
 
             self.update_ac_sources()
             self.update_genset_ac_voltage_publication()
+            self.update_shore_power_publication()
             self.write_status()
             return
 
@@ -2075,6 +2170,7 @@ class Bridge:
                 self.service["/Scheiber/HousePanelFrequencyStatus"] = freq_status
 
             self.update_genset_ac_voltage_publication()
+            self.update_shore_power_publication()
             return
 
         # --------------------------------------------------------------
@@ -2427,6 +2523,7 @@ class Bridge:
 
         # Re-evaluate preferred/fallback generator AC voltage freshness.
         self.update_genset_ac_voltage_publication()
+        self.update_shore_power_publication()
 
         # Keep status.json useful without writing it for every battery frame.
         if now - self.last_status_snapshot >= STATUS_SNAPSHOT_INTERVAL:

@@ -15,7 +15,7 @@ SWITCH_TX_ENABLED="${SWITCH_TX_ENABLED:-1}"
 SWITCH_RTR_ENABLED="${SWITCH_RTR_ENABLED:-1}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-EXPECTED_BRIDGE_SHA256="d53d54d5f1319b36a85ce96da9124ec49df1c674876976a01e2c9fcc055fd4ae"
+EXPECTED_BRIDGE_SHA256="8d58907d733373f1339589580b1f5ce20477c8ed642475226ff9a80b99268774"
 RC_LOCAL="${RC_LOCAL:-/data/rc.local}"
 MAIN_MARKER="# scheiber-gx persistent runit service"
 SWITCH_MARKER="# scheiber-switch persistent runit service"
@@ -302,22 +302,27 @@ try:
         text = f.read()
     pattern = r'(\\t+sources = zip\\([\\s\\S]*?newvalues\\[\\\'/Ac/In/NumberOfAcInputs\\\'\\] = input_count)'
     replacement = '''\\t\\t\\tsources = [
-\\t\\t\\t\\t(s, t) for s, t in (
-\\t\\t\\t\\t\\t(self.gridmeter, 1),
-\\t\\t\\t\\t\\t(self.gensetmeter, 2)
-\\t\\t\\t\\t) if s is not None
+\\t\\t\\t\\t(s, 3 if 'shore' in s.service.lower() else 1) for s in [self.gridmeter] if s is not None
+\\t\\t\\t] + [
+\\t\\t\\t\\t(s, 2) for s in [self.gensetmeter] if s is not None
 \\t\\t\\t]
+\\t\\t\\tany_active = False
 \\t\\t\\tfor source, t in sources:
 \\t\\t\\t\\tif t == 2:
 \\t\\t\\t\\t\\tst = self._dbusmonitor.get_value(source.service, '/StatusCode')
 \\t\\t\\t\\t\\tv = self._dbusmonitor.get_value(source.service, '/Ac/L1/Voltage')
 \\t\\t\\t\\t\\tactive = bool(st in (1, 8) or (v is not None and v > 50))
+\\t\\t\\t\\telif t in (1, 3):
+\\t\\t\\t\\t\\tconn = self._dbusmonitor.get_value(source.service, '/Connected')
+\\t\\t\\t\\t\\tv = self._dbusmonitor.get_value(source.service, '/Ac/L1/Voltage')
+\\t\\t\\t\\t\\tactive = bool(conn == 1 or (v is not None and v > 50))
 \\t\\t\\t\\telse:
 \\t\\t\\t\\t\\tactive = bool(input_count == 0)
 \\t\\t\\t\\tnewvalues.update(self.input_tree(input_count, source.service, source.instance, t, int(active)))
-\\t\\t\\t\\tif active:
+\\t\\t\\t\\tif active and not any_active:
 \\t\\t\\t\\t\\tnewvalues['/Ac/ActiveIn/ServiceType'] = source.service.split(\".\")[2]
 \\t\\t\\t\\t\\tnewvalues['/Ac/ActiveIn/Source'] = t
+\\t\\t\\t\\t\\tany_active = True
 \\t\\t\\t\\tinput_count += 1
 \\t\\t\\tnewvalues['/Ac/In/NumberOfAcInputs'] = input_count'''
     if re.search(pattern, text):

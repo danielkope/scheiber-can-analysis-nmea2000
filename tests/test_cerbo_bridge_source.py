@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 
 
-EXPECTED_SHA256 = "d53d54d5f1319b36a85ce96da9124ec49df1c674876976a01e2c9fcc055fd4ae"
+EXPECTED_SHA256 = "8d58907d733373f1339589580b1f5ce20477c8ed642475226ff9a80b99268774"
 
 
 class TestCerboBridgeSource(unittest.TestCase):
@@ -14,7 +14,7 @@ class TestCerboBridgeSource(unittest.TestCase):
         text = source.decode("utf-8")
 
         self.assertEqual(hashlib.sha256(source).hexdigest(), EXPECTED_SHA256)
-        self.assertIn('BRIDGE_VERSION = "5.6.0"', text)
+        self.assertIn('BRIDGE_VERSION = "5.7.0"', text)
         self.assertIn('None if capacity_l is None else float(capacity_l) / 1000.0', text)
         self.assertIn('"capacity_m3": svc["/Capacity"]', text)
         self.assertIn('"remaining_m3": svc["/Remaining"]', text)

@@ -114,10 +114,10 @@ cerbo/install.sh                    transactional installer/updater
 cerbo/uninstall.sh                  disables both services
 ```
 
-The telemetry bridge is version `5.6.0`, with canonical SHA-256:
+The telemetry bridge is version `5.7.0`, with canonical SHA-256:
 
 ```text
-d53d54d5f1319b36a85ce96da9124ec49df1c674876976a01e2c9fcc055fd4ae
+8d58907d733373f1339589580b1f5ce20477c8ed642475226ff9a80b99268774
 ```
 
 ## Fresh installation or update with curl
