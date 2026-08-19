@@ -46,11 +46,18 @@
     "source_selector_control": "disabled; 0x02420B90 and 0x02420B88 are not transmitted",
     "restart_caveat": "after 0 Hz STOPPED, wait for 0x02440B88#00 OFF_IDLE before requesting another START on bridge v5.4.2"
   },
+  "starter_battery_alarm": {
+    "warn_voltage_v": 12.2,
+    "alarm_voltage_v": 11.8,
+    "hysteresis_v": 0.3,
+    "hold_seconds": 15.0,
+    "cranking_rejection": "sustained time window prevents cranking voltage dips from raising false alarms"
+  },
   "cerbo_bridge": {
-    "version": "5.4.2",
-    "sha256": "6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097",
+    "version": "5.9.0",
+    "sha256": "f3fecabfb42530c2fc9dc3007fbd0036092a33e4e10a57adc2242a0efd45f3bc",
     "field_tested_v5_4_1_source_sha256": "b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1",
-    "default_can_interface": "can2",
+    "default_can_interface": "can0",
     "service": "com.victronenergy.genset.scheiber",
     "victron_manager": "com.victronenergy.generator.startstop1"
   }

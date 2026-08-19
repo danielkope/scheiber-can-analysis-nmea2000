@@ -33,8 +33,10 @@ This engineering report is split into review-friendly Markdown sections. The bui
 
 ## Current live addenda
 
+- [`AC_POWER_AND_INVERTERS.md`](AC_POWER_AND_INVERTERS.md): complete AC sources, 1 Hz heartbeat sample-and-hold telemetry, MasterVolt 2000W Inverter service, and GUI-v2 system topology.
+- [`SWITCH_SERVICE_HANDOVER.md`](SWITCH_SERVICE_HANDOVER.md): native Victron switch service (`com.victronenergy.switch.scheiber`), Multibloc V8 sailing-panel mappings, and Node-RED automation flows (Anchor Light & Bilge Monitoring).
 - [`GENERATOR_LIFECYCLE.md`](GENERATOR_LIFECYCLE.md): passive lifecycle model plus follow-on live START/STOP, OFF_IDLE, and Victron state-management findings.
-- [`CERBO_GX_INTEGRATION.md`](CERBO_GX_INTEGRATION.md): tested bridge version, installation, D-Bus architecture, mappings, diagnostics, limitations, and rollback.
+- [`CERBO_GX_INTEGRATION.md`](CERBO_GX_INTEGRATION.md): tested bridge version, installation, D-Bus architecture, mappings, diagnostics, smart starter battery low-voltage alarms, and rollback.
 - [`SIGNALK_NMEA2000.md`](SIGNALK_NMEA2000.md): live Signal K -> NMEA 2000 tank output, PGN 127505 instance mapping, VE.Can loopback verification, and B&G Zeus3 guidance.
 - [`NMEA2000_MAPPING.md`](NMEA2000_MAPPING.md): current standard-PGN publication plan and live/deferred status.
 - [`MAPPING_TABLE.md`](MAPPING_TABLE.md): current consolidated Scheiber CAN mapping register, including fields confirmed after the original report was generated.

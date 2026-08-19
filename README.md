@@ -53,8 +53,8 @@ The complete canonical runtime source is checked in directly as [`cerbo/bridge.p
 Current bridge:
 
 ```text
-version 5.8.0
-SHA-256 e0a6deb23a8d94c696386436991b068f187addd184c475b3370bf5960170e821
+version 5.9.0
+SHA-256 f3fecabfb42530c2fc9dc3007fbd0036092a33e4e10a57adc2242a0efd45f3bc
 ```
 
 ### Fresh install or update

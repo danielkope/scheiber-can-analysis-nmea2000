@@ -86,7 +86,7 @@ SERVICE_NAME = "com.victronenergy.genset.scheiber"
 DEVICE_INSTANCE = 40
 PRODUCT_ID = 0xFFFF
 PRODUCT_NAME = "Scheiber Generator"
-BRIDGE_VERSION = "5.8.0"
+BRIDGE_VERSION = "5.9.0"
 
 LOGFILE = "/data/scheiber-gx/bridge.log"
 STATUSFILE = "/data/scheiber-gx/status.json"
@@ -296,6 +296,13 @@ BATTERY_KEY_BY_CAN = {row[4]: row[0] for row in BATTERY_DEFS}
 HOUSE_KEY_BY_CAN = {
     row[4]: row[0] for row in BATTERY_DEFS if row[5] == "house"
 }
+
+# Smart Starter Battery Low-Voltage Alarm Configuration
+# Prevents false alarms during engine / generator cranking dips (< 15s transient)
+STARTER_LOW_VOLTAGE_WARN = 12.2   # Warning threshold in Volts
+STARTER_LOW_VOLTAGE_ALARM = 11.8  # Critical Alarm threshold in Volts
+STARTER_VOLTAGE_HYSTERESIS = 0.3  # Recovery hysteresis in Volts (clears warning at >= 12.5V)
+STARTER_ALARM_HOLD_SECONDS = 15.0 # Sustained low voltage duration required to trigger
 CAN_FILTER_IDS = tuple(sorted(set(
     (
         GEN_CONTROL_ID,
@@ -406,6 +413,10 @@ class Bridge:
         # multiple VeDbusService instances that all export "/" and "/Mgmt/..."
         # causes an immediate registration collision.
         self.battery_buses = {}
+        self.starter_voltages = {}
+        self.battery_low_voltage_warn_start = {}
+        self.battery_low_voltage_alarm_start = {}
+        self.battery_alarm_state = {}
 
         # Native Victron tank services. Each gets its own private D-Bus
         # connection for the same reason as the per-battery services.
@@ -652,6 +663,8 @@ class Bridge:
                 "---" if v is None else "{:.1f} V".format(float(v))
             ),
         )
+        self.service.add_path("/StarterVoltageAlarm", 0)
+        self.service.add_path("/Alarms/StarterVoltage", 0)
 
         # Diagnostic paths.  They are ignored by normal Victron generator code.
         self.service.add_path("/Scheiber/State", self.actual_state)
@@ -881,6 +894,7 @@ class Bridge:
                     "---" if v is None else "{:.0f}%".format(float(v))
                 ),
             )
+            svc.add_path("/Alarms/LowVoltage", 0)
 
             # Transparent diagnostic metadata.
             svc.add_path("/Scheiber/CanId", "{:08X}".format(can_id))
@@ -1085,6 +1099,61 @@ class Bridge:
         svc["/Dc/0/Current"] = None
         svc["/Dc/0/Power"] = None
         svc["/Soc"] = None
+
+    def update_smart_starter_battery_alarm(self, key, voltage):
+        """Smart low-voltage alarm evaluation for engine and generator starter batteries.
+
+        Rejects momentary cranking voltage dips (< 15 seconds) and applies a 0.3V
+        recovery hysteresis to prevent alarm flapping.
+        """
+        now = time.monotonic()
+        current_state = self.battery_alarm_state.get(key, 0)
+        self.starter_voltages[key] = voltage
+
+        if voltage is None or voltage <= 0.0:
+            self.battery_low_voltage_warn_start[key] = None
+            self.battery_low_voltage_alarm_start[key] = None
+            return
+
+        v = float(voltage)
+
+        # 1. Critical Alarm evaluation (<= 11.8V sustained)
+        if v <= STARTER_LOW_VOLTAGE_ALARM:
+            if self.battery_low_voltage_alarm_start.get(key) is None:
+                self.battery_low_voltage_alarm_start[key] = now
+            if now - self.battery_low_voltage_alarm_start[key] >= STARTER_ALARM_HOLD_SECONDS:
+                current_state = 2
+        else:
+            # Check recovery from alarm state (must rise >= 12.1V to clear alarm)
+            if current_state == 2 and v >= (STARTER_LOW_VOLTAGE_ALARM + STARTER_VOLTAGE_HYSTERESIS):
+                current_state = 1 if v <= STARTER_LOW_VOLTAGE_WARN else 0
+            if v > STARTER_LOW_VOLTAGE_ALARM:
+                self.battery_low_voltage_alarm_start[key] = None
+
+        # 2. Warning evaluation (<= 12.2V sustained)
+        if v <= STARTER_LOW_VOLTAGE_WARN:
+            if self.battery_low_voltage_warn_start.get(key) is None:
+                self.battery_low_voltage_warn_start[key] = now
+            if current_state < 2 and now - self.battery_low_voltage_warn_start[key] >= STARTER_ALARM_HOLD_SECONDS:
+                current_state = 1
+        else:
+            # Check recovery from warning state (must rise >= 12.5V to clear warning)
+            if current_state == 1 and v >= (STARTER_LOW_VOLTAGE_WARN + STARTER_VOLTAGE_HYSTERESIS):
+                current_state = 0
+            if v > STARTER_LOW_VOLTAGE_WARN:
+                self.battery_low_voltage_warn_start[key] = None
+
+        self.battery_alarm_state[key] = current_state
+
+        # Publish to native battery service if registered
+        svc = self.battery_services.get(key)
+        if svc is not None:
+            svc["/Alarms/LowVoltage"] = current_state
+
+        # For generator starter battery, also publish to genset service
+        if key == "generator" and self.service is not None:
+            self.service["/StarterVoltageAlarm"] = current_state
+            self.service["/Alarms/StarterVoltage"] = current_state
 
     def update_ac_sources(self):
         """Update applied AC source telemetry and Mastervolt inverter state."""
@@ -2356,11 +2425,13 @@ class Bridge:
                     voltage=self.last_starter_voltage,
                     raw_words=[raw0, raw1 or 0, raw2 or 0],
                 )
+                self.update_smart_starter_battery_alarm("generator", self.last_starter_voltage)
             else:
                 # Keep obviously invalid/off values out of the native UI, but
                 # retain raw words for diagnostics.
                 self.last_starter_voltage = None
                 self.service["/StarterVoltage"] = None
+                self.update_smart_starter_battery_alarm("generator", None)
                 svc = self.battery_services.get("generator")
                 if svc is not None:
                     svc["/Dc/0/Voltage"] = None
@@ -2478,6 +2549,7 @@ class Bridge:
                 voltage=voltage_out,
                 raw_words=[raw0, raw1 or 0, raw2 or 0],
             )
+            self.update_smart_starter_battery_alarm("engine_starboard", voltage_out)
             return
 
         # --------------------------------------------------------------
@@ -2504,6 +2576,7 @@ class Bridge:
                 voltage=voltage_port_out,
                 raw_words=[raw0, raw1, raw2 or 0],
             )
+            self.update_smart_starter_battery_alarm("engine_port", voltage_port_out)
             return
 
         # --------------------------------------------------------------
@@ -2667,6 +2740,11 @@ class Bridge:
         self.update_genset_ac_voltage_publication()
         self.update_shore_power_publication()
         self.update_mastervolt_inverter_publication()
+
+        # Periodic starter-battery smart low-voltage alarm evaluation
+        for k in ("generator", "engine_port", "engine_starboard"):
+            if k in self.starter_voltages:
+                self.update_smart_starter_battery_alarm(k, self.starter_voltages[k])
 
         # Keep status.json useful without writing it for every battery frame.
         if now - self.last_status_snapshot >= STATUS_SNAPSHOT_INTERVAL:

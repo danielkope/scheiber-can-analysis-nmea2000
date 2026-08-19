@@ -19,8 +19,8 @@ Canonical runtime source:
 
 ```text
 cerbo/bridge.py
-version 5.8.0
-SHA-256 e0a6deb23a8d94c696386436991b068f187addd184c475b3370bf5960170e821
+version 5.9.0
+SHA-256 f3fecabfb42530c2fc9dc3007fbd0036092a33e4e10a57adc2242a0efd45f3bc
 ```
 
 The bridge publishes:
@@ -469,7 +469,7 @@ done
 
 The tank service text formatter converts m3 back to litres for human-readable display. Signal K receives the correct SI values directly from D-Bus.
 
-## Battery services
+## Battery services and smart low-voltage alarms
 
 ### Six house batteries
 
@@ -485,20 +485,59 @@ Per frame:
 | 2-3 | `(LE16 - 0x4E00) * 0.1 A` | sign/offset strong; scale candidate |
 | 4-5 | LE16 x1 % SoC | confirmed for this installation |
 
-Physical house-battery 1-6 ordering remains to be validated.
+### Engine & Generator starter batteries
 
-### Engine batteries
+| Channel | CAN ID | Source | Decode | D-Bus Service |
+|---|---|---|---|---|
+| **Starboard Engine Starter** | `0x00501008` | 60A Multi-Output Charger (B1) | `LE16[0..1] * 0.1 V` | `com.victronenergy.battery.scheiber_engine_starboard` |
+| **Port Engine Starter** | `0x00561008` | 60A Multi-Output Charger (B3) | `LE16[2..3] * 0.1 V` | `com.victronenergy.battery.scheiber_engine_port` |
+| **Generator Starter** | `0x00501020` | 25A Generator Charger Family | `LE16[0..1] * 0.1 V` | `com.victronenergy.battery.scheiber_generator_starter`<br>`com.victronenergy.genset.scheiber` (`/StarterVoltage`) |
+
+### Smart Low-Voltage Alarm Algorithm
+
+To avoid false alarms during normal engine/generator cranking dips (where voltage pulls down to ~10.5V for 1-3 seconds), a smart filtering engine is evaluated in `cerbo/bridge.py`:
 
 ```text
-06140580 -> Engine Battery A
-06180580 -> Engine Battery B
+Voltage Normal (> 12.5V) ──────────────────────────► Alarm State: 0 (OK)
+      │
+      ▼ (<= 12.2V sustained >= 15.0s)
+Voltage Warning (<= 12.2V) ────────────────────────► Alarm State: 1 (Warning)
+      │
+      ▼ (<= 11.8V sustained >= 15.0s)
+Critical Low Voltage (<= 11.8V) ───────────────────► Alarm State: 2 (Alarm)
+      │
+      ▲ (Voltage recovers >= 12.1V / 12.5V via 0.3V hysteresis)
 ```
 
-The current `0.00053 V/count` scale is experimental and produces plausible ~13.6 V values. Port/starboard identity and scale still need crank validation.
+1. **Transient Cranking Rejection**: Any transient voltage dip lasting `< 15.0 seconds` is completely ignored.
+2. **Hysteresis Recovery**: Warnings require voltage to rise back to `>= 12.5 V` (threshold + 0.3V) to clear, preventing alarm oscillations.
+3. **Published D-Bus Paths**:
+   - `/Alarms/LowVoltage` on all battery services (`0` = OK, `1` = Warning, `2` = Alarm).
+   - `/StarterVoltageAlarm` & `/Alarms/StarterVoltage` on `com.victronenergy.genset.scheiber`.
 
-### Generator starter
+---
 
-`00501020` bytes 0-1 LE x0.1 V is published as generator starter voltage. Its current and AC-input fields remain diagnostic/candidate data.
+## Venus OS GUI-v2 Live Visualization
+
+### 1. Main Overview Topology
+Displays live AC sources (Grid/Shore vs Generator vs MasterVolt Inverter) and DC battery bank flow:
+
+![Venus OS GUI-v2 Live AC Topology](images/gui-v2-overview.png)
+
+### 2. Dual Inverter Management
+Independent monitoring for MasterVolt 2000W Inverter (Scheiber CAN) and Starlink Phoenix Inverter (VE.Direct):
+
+![Victron GUI-v2 Inverters List](images/gui-v2-inverters-list.png)
+
+### 3. Tank Levels (Fresh Water & Twin Diesel)
+Standard SI cubic-metre conversion mapped directly to GUI level bars:
+
+![Victron GUI-v2 Fluid Levels](images/gui-v2-levels.png)
+
+### 4. Device Controls & Switch Integration
+Native switch outputs and battery monitoring tiles rendered in GUI-v2:
+
+![Victron GUI-v2 Controls Cards](images/gui-v2-controls-cards.png)
 
 ## Rollback
 

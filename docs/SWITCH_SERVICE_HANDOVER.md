@@ -423,6 +423,8 @@ Monitors vessel GPS position (`com.victronenergy.gps`), computes local sunrise/s
 #### 2. Real-Time Bilge Alarms & Monitoring (`Bilge Alarms & Monitor`)
 Listens to continuous pump motor telemetry (`0x02141808`) and mode registers (`0x02140808`), providing 2-minute run warnings, 5-minute critical alarms, and mode-OFF anomaly injection into Venus OS GUI notifications.
 
+Do not automatically stop a long-running bilge. Long runtime can indicate water ingress and should escalate alarms while pumping continues.
+
 ![Bilge Alarms and Monitor Flow](images/node-red-bilge-alarms-and-monitor-flow.png)
 
 ## 12. Rollback
