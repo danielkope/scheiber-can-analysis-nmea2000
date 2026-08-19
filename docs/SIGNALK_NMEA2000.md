@@ -11,7 +11,7 @@ Scheiber proprietary CAN
         |
         | SH-C30A / gs_usb
         v
-can2 @ 250 kbit/s
+can0 @ 250 kbit/s
         |
         v
 cerbo/bridge.py
@@ -23,22 +23,22 @@ Victron D-Bus tank services
         |                              |
         v                              v
 Victron Venus Plugin             Venus OS native
-(D-Bus -> Signal K)              NMEA 2000-out
+(D-Bus -> Signal K)              NMEA 2000-out (can1)
         |                              |
         v                              v
 tanks.freshWater.90              PGN 127505
 tanks.fuel.91                    tank instance 6/7/8
 tanks.fuel.92                         |
         |                              v
-        |                        VE.Can / NMEA 2000
+        |                        VE.Can / NMEA 2000 (can1)
         |                              |
         |                              +--> B&G Zeus3
         |                              |
         +<-- n2k-on-ve.can-socket -----+
-             loopback decode
+             loopback decode (can1)
 ```
 
-Do **not** electrically join `can2` to NMEA 2000. They are separate CAN networks even though both may run at 250 kbit/s.
+Do **not** electrically join `can0` (Scheiber) to `can1` (NMEA 2000). They are separate CAN networks even though both run at 250 kbit/s. In `/data/conf/signalk/settings.json`, the provider `n2k-on-ve.can-socket` must be set to `can1`.
 
 ## Live-tested tank services
 
