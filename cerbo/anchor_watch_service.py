@@ -6,7 +6,7 @@ Features:
   2. One-tap "Reset to Heading + Distance" projection.
   3. Continuous Breadcrumb Track & Wind (TWS/TWD) History Recording.
   4. Real-time NMEA 2000 listener (Wind PGN 130306, Depth PGN 128267, Heading PGN 127250, GPS PGN 129029).
-  5. Vector Cairo Map Rendering with concentric rings, swing trail, and live Wind Rose HUD.
+  5. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD time-series plot.
   6. Interactive Telegram Bot with dynamic quick-action buttons & map photo dispatch.
   7. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
 """
@@ -109,17 +109,35 @@ def wind_direction_cardinal(deg):
     return cardinals[idx]
 
 
-def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, current_lat, current_lon, current_heading=0.0, current_sog=0.0, current_soc=None, current_wind_speed=None, current_wind_dir=None, current_depth=None, wind_history=None):
-    """Render high-resolution dark nautical anchor watch map as PNG with Wind Rose."""
+def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, current_lat, current_lon,
+                          current_heading=0.0, current_sog=0.0, current_soc=None,
+                          current_wind_speed=None, current_wind_dir=None, current_depth=None,
+                          wind_history=None):
+    """Render high-resolution dark nautical anchor watch map with synchronized TWS/TWD history plot."""
     if not HAVE_CAIRO:
         return None
 
-    width, height = 850, 850
+    width, height = 900, 980
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
 
+    # 1. Background
+    ctx.set_source_rgb(0.04, 0.07, 0.12)
+    ctx.paint()
+
+    map_top = 105
+    map_height = 570
+    map_center_x = width / 2.0
+    map_center_y = map_top + map_height / 2.0
+
+    chart_top = 700
+    chart_height = 230
+    chart_left = 65
+    chart_right = width - 65
+    chart_width = chart_right - chart_left
+
     R = 6371000.0
-    lat_rad = math.radians(anchor_lat)
+    lat_rad = math.radians(anchor_lat) if anchor_lat else 0.0
 
     def gps_to_xy(lat, lon):
         d_lat = math.radians(lat - anchor_lat)
@@ -130,7 +148,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
 
     all_x = [0.0]
     all_y = [0.0]
-    for pt in track_points:
+    for pt in (track_points or []):
         ex, ny = gps_to_xy(pt["lat"], pt["lon"])
         all_x.append(ex)
         all_y.append(ny)
@@ -140,58 +158,82 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         all_y.append(cy)
 
     max_dist = max(alarm_radius_m * 1.35, max(math.hypot(x, y) for x, y in zip(all_x, all_y)) * 1.25, 30.0)
-    scale = (min(width, height) / 2.0 - 55.0) / max_dist
-
-    center_x = width / 2.0
-    center_y = height / 2.0 + 15.0
+    scale = (map_height / 2.0 - 45.0) / max_dist
 
     def to_pixel(east_m, north_m):
-        return center_x + east_m * scale, center_y - north_m * scale
+        return map_center_x + east_m * scale, map_center_y - north_m * scale
 
-    # 1. Background
-    ctx.set_source_rgb(0.04, 0.07, 0.12)
-    ctx.paint()
+    # 2. TOP HUD HEADER
+    ctx.set_source_rgba(0.02, 0.05, 0.09, 0.9)
+    ctx.rectangle(15, 15, width - 30, 80)
+    ctx.fill()
+    ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
+    ctx.set_line_width(1.0)
+    ctx.rectangle(15, 15, width - 30, 80)
+    ctx.stroke()
 
-    # 2. Concentric Distance Rings
+    cur_dist = math.hypot(*gps_to_xy(current_lat, current_lon)) if (current_lat and current_lon) else 0.0
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    ctx.set_font_size(16)
+    ctx.set_source_rgb(0.2, 0.95, 0.65)
+    ctx.move_to(30, 42)
+    ctx.show_text(f"DISTANCE TO ANCHOR: {cur_dist:.1f} m  |  SAFE LIMIT: {alarm_radius_m:.0f} m")
+
+    ctx.set_font_size(13)
+    ctx.set_source_rgb(0.85, 0.92, 1.0)
+    ctx.move_to(30, 66)
+    soc_str = f"{current_soc:.0f}%" if current_soc is not None else "N/A"
+    depth_str = f"{current_depth:.1f}m" if current_depth is not None else "N/A"
+    cardinal = wind_direction_cardinal(current_wind_dir)
+    wind_str = f"{current_wind_speed:.1f}kn {cardinal} ({current_wind_dir:.0f}°)" if (current_wind_speed is not None and current_wind_dir is not None) else "N/A"
+    ctx.show_text(f"WIND: {wind_str}   DEPTH: {depth_str}   HDG: {current_heading:.0f}°   BATTERY: {soc_str}")
+
+    ctx.set_font_size(11)
+    ctx.set_source_rgba(0.5, 0.7, 0.9, 0.8)
+    ctx.move_to(30, 85)
+    ctx.show_text(f"SOG: {current_sog:.1f} kn   TRACK PTS: {len(track_points or [])}   WIND SAMPLES: {len(wind_history or [])}")
+
+    # 3. ANCHOR MAP VIEWPORT
+    # Concentric Distance Rings
     ring_interval = 10.0 if max_dist <= 60 else (20.0 if max_dist <= 150 else 50.0)
     r = ring_interval
     while r <= max_dist:
         ctx.set_source_rgba(0.2, 0.35, 0.5, 0.25)
         ctx.set_line_width(1.0)
-        ctx.arc(center_x, center_y, r * scale, 0, 2 * math.pi)
+        ctx.arc(map_center_x, map_center_y, r * scale, 0, 2 * math.pi)
         ctx.stroke()
 
         ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-        ctx.set_font_size(11)
+        ctx.set_font_size(10)
         ctx.set_source_rgba(0.4, 0.6, 0.8, 0.6)
-        ctx.move_to(center_x + 6, center_y - r * scale + 12)
+        ctx.move_to(map_center_x + 6, map_center_y - r * scale + 12)
         ctx.show_text(f"{r:.0f}m")
         r += ring_interval
 
-    # 3. Crosshairs
+    # Crosshairs
     ctx.set_source_rgba(0.2, 0.35, 0.5, 0.3)
     ctx.set_line_width(1.0)
-    ctx.move_to(center_x, 30)
-    ctx.line_to(center_x, height - 30)
-    ctx.move_to(30, center_y)
-    ctx.line_to(width - 30, center_y)
+    ctx.move_to(map_center_x, map_top + 10)
+    ctx.line_to(map_center_x, map_top + map_height - 10)
+    ctx.move_to(30, map_center_y)
+    ctx.line_to(width - 30, map_center_y)
     ctx.stroke()
 
-    # 4. Safe Alarm Radius (Dashed Green/Cyan Circle)
+    # Safe Alarm Radius (Dashed Green/Cyan Circle)
     alarm_px = alarm_radius_m * scale
     ctx.set_source_rgba(0.1, 0.8, 0.4, 0.08)
-    ctx.arc(center_x, center_y, alarm_px, 0, 2 * math.pi)
+    ctx.arc(map_center_x, map_center_y, alarm_px, 0, 2 * math.pi)
     ctx.fill()
 
     ctx.set_source_rgba(0.1, 0.9, 0.5, 0.85)
     ctx.set_line_width(2.0)
     ctx.set_dash([6.0, 4.0])
-    ctx.arc(center_x, center_y, alarm_px, 0, 2 * math.pi)
+    ctx.arc(map_center_x, map_center_y, alarm_px, 0, 2 * math.pi)
     ctx.stroke()
     ctx.set_dash([])
 
-    # 5. Breadcrumb Track History
-    if len(track_points) > 1:
+    # Breadcrumb Track History
+    if track_points and len(track_points) > 1:
         ctx.set_line_width(2.5)
         for i in range(len(track_points) - 1):
             p1 = track_points[i]
@@ -211,46 +253,43 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
             ctx.arc(px, py, 2.0, 0, 2 * math.pi)
             ctx.fill()
 
-    # 6. Rode Line
+    # Rode Line
     if current_lat and current_lon:
         cx, cy = to_pixel(*gps_to_xy(current_lat, current_lon))
         ctx.set_source_rgba(1.0, 0.85, 0.2, 0.6)
         ctx.set_line_width(1.5)
         ctx.set_dash([4.0, 3.0])
-        ctx.move_to(center_x, center_y)
+        ctx.move_to(map_center_x, map_center_y)
         ctx.line_to(cx, cy)
         ctx.stroke()
         ctx.set_dash([])
 
-    # 7. Anchor Marker at Center (0,0)
+    # Anchor Marker at Center
     ctx.set_source_rgb(1.0, 0.3, 0.2)
-    ctx.arc(center_x, center_y, 7.0, 0, 2 * math.pi)
+    ctx.arc(map_center_x, map_center_y, 7.0, 0, 2 * math.pi)
     ctx.fill()
     ctx.set_source_rgb(1.0, 1.0, 1.0)
     ctx.set_line_width(2.0)
-    ctx.arc(center_x, center_y, 7.0, 0, 2 * math.pi)
+    ctx.arc(map_center_x, map_center_y, 7.0, 0, 2 * math.pi)
     ctx.stroke()
 
     ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    ctx.set_font_size(13)
+    ctx.set_font_size(12)
     ctx.set_source_rgb(1.0, 0.4, 0.3)
-    ctx.move_to(center_x + 10, center_y + 16)
+    ctx.move_to(map_center_x + 10, map_center_y + 16)
     ctx.show_text("⚓ ANCHOR")
 
-    # 8. Current Vessel Position & Hull
+    # Current Vessel Position & Hull
     if current_lat and current_lon:
         cx, cy = to_pixel(*gps_to_xy(current_lat, current_lon))
         hdg_rad = math.radians(current_heading)
-
         boat_len = 16.0
         boat_width = 8.0
         
         tip_x = cx + boat_len * math.sin(hdg_rad)
         tip_y = cy - boat_len * math.cos(hdg_rad)
-        
         port_x = cx - boat_width * math.cos(hdg_rad) - (boat_len * 0.4) * math.sin(hdg_rad)
         port_y = cy - boat_width * math.sin(hdg_rad) + (boat_len * 0.4) * math.cos(hdg_rad)
-        
         stbd_x = cx + boat_width * math.cos(hdg_rad) - (boat_len * 0.4) * math.sin(hdg_rad)
         stbd_y = cy + boat_width * math.sin(hdg_rad) + (boat_len * 0.4) * math.cos(hdg_rad)
 
@@ -273,121 +312,81 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.arc(cx, cy, 3.0, 0, 2 * math.pi)
         ctx.fill()
 
-    # 9. Top HUD Overlay Header
-    cur_dist = math.hypot(*gps_to_xy(current_lat, current_lon)) if (current_lat and current_lon) else 0.0
-    ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
-    ctx.rectangle(15, 15, width - 30, 80)
-    ctx.fill()
-    ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
-    ctx.set_line_width(1.0)
-    ctx.rectangle(15, 15, width - 30, 80)
-    ctx.stroke()
-
-    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    ctx.set_font_size(15)
-    ctx.set_source_rgb(0.2, 0.9, 0.6)
-    ctx.move_to(30, 42)
-    ctx.show_text(f"DISTANCE: {cur_dist:.1f} m  |  LIMIT: {alarm_radius_m:.0f} m")
-
-    ctx.set_font_size(13)
-    ctx.set_source_rgb(0.8, 0.9, 1.0)
-    ctx.move_to(30, 66)
-    soc_str = f"{current_soc:.0f}%" if current_soc is not None else "N/A"
-    depth_str = f"{current_depth:.1f}m" if current_depth is not None else "N/A"
-    wind_str = f"{current_wind_speed:.1f}kn {wind_direction_cardinal(current_wind_dir)} ({current_wind_dir:.0f}°)" if (current_wind_speed is not None and current_wind_dir is not None) else "N/A"
-    ctx.show_text(f"WIND: {wind_str}   DEPTH: {depth_str}   HDG: {current_heading:.0f}°   BATTERY: {soc_str}")
-
-    ctx.set_font_size(11)
-    ctx.set_source_rgba(0.5, 0.7, 0.9, 0.8)
-    ctx.move_to(30, 85)
-    ctx.show_text(f"SOG: {current_sog:.1f} kn   TRACK POINTS: {len(track_points)}")
-
-    # 10. North-Up Compass Indicator (Top Left)
+    # North-Up Compass Indicator (Top Left)
     nu_x = 55
-    nu_y = 155
+    nu_y = map_top + 45
     ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
-    ctx.rectangle(nu_x - 30, nu_y - 42, 60, 84)
+    ctx.rectangle(nu_x - 30, nu_y - 38, 60, 76)
     ctx.fill()
     ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
     ctx.set_line_width(1.0)
-    ctx.rectangle(nu_x - 30, nu_y - 42, 60, 84)
+    ctx.rectangle(nu_x - 30, nu_y - 38, 60, 76)
     ctx.stroke()
 
-    # Red North Pointer
     ctx.set_source_rgb(0.95, 0.25, 0.25)
-    ctx.move_to(nu_x, nu_y - 28)
-    ctx.line_to(nu_x - 7, nu_y - 4)
-    ctx.line_to(nu_x + 7, nu_y - 4)
+    ctx.move_to(nu_x, nu_y - 25)
+    ctx.line_to(nu_x - 6, nu_y - 4)
+    ctx.line_to(nu_x + 6, nu_y - 4)
     ctx.close_path()
     ctx.fill()
 
-    # White South Pointer
     ctx.set_source_rgb(0.7, 0.8, 0.9)
-    ctx.move_to(nu_x, nu_y + 20)
-    ctx.line_to(nu_x - 7, nu_y - 4)
-    ctx.line_to(nu_x + 7, nu_y - 4)
+    ctx.move_to(nu_x, nu_y + 18)
+    ctx.line_to(nu_x - 6, nu_y - 4)
+    ctx.line_to(nu_x + 6, nu_y - 4)
     ctx.close_path()
     ctx.fill()
 
     ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    ctx.set_font_size(11)
+    ctx.set_font_size(10)
     ctx.set_source_rgb(1.0, 1.0, 1.0)
-    ctx.move_to(nu_x - 4, nu_y - 31)
+    ctx.move_to(nu_x - 4, nu_y - 27)
     ctx.show_text("N")
-
-    ctx.set_font_size(9)
+    ctx.set_font_size(8)
     ctx.set_source_rgba(0.6, 0.8, 1.0, 0.9)
-    ctx.move_to(nu_x - 22, nu_y + 35)
+    ctx.move_to(nu_x - 22, nu_y + 30)
     ctx.show_text("NORTH UP")
 
-    # 11. Floating Wind Rose in Top Right
+    # Floating Wind Rose in Top Right
     if current_wind_dir is not None:
         wr_x = width - 85
-        wr_y = 155
-        wr_rad = 38.0
+        wr_y = map_top + 45
+        wr_rad = 36.0
 
         ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
-        ctx.rectangle(wr_x - 48, wr_y - 42, 96, 84)
+        ctx.rectangle(wr_x - 48, wr_y - 38, 96, 76)
         ctx.fill()
         ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
         ctx.set_line_width(1.0)
-        ctx.rectangle(wr_x - 48, wr_y - 42, 96, 84)
+        ctx.rectangle(wr_x - 48, wr_y - 38, 96, 76)
         ctx.stroke()
 
-        # Header
         ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         ctx.set_font_size(9)
         ctx.set_source_rgba(0.0, 0.9, 1.0, 0.95)
-        ctx.move_to(wr_x - 26, wr_y - 30)
+        ctx.move_to(wr_x - 26, wr_y - 26)
         ctx.show_text("TRUE WIND")
 
-        # Wind Rose Compass Ring
         ctx.set_source_rgba(0.3, 0.5, 0.7, 0.4)
         ctx.set_line_width(1.0)
-        ctx.arc(wr_x, wr_y + 4, wr_rad - 10, 0, 2 * math.pi)
+        ctx.arc(wr_x, wr_y + 3, wr_rad - 10, 0, 2 * math.pi)
         ctx.stroke()
 
-        # Cardinal markers
         ctx.set_font_size(8)
         ctx.set_source_rgba(0.6, 0.8, 1.0, 0.9)
-        ctx.move_to(wr_x - 3, wr_y + 4 - (wr_rad - 10) + 8)
+        ctx.move_to(wr_x - 3, wr_y + 3 - (wr_rad - 10) + 8)
         ctx.show_text("N")
-        ctx.move_to(wr_x + (wr_rad - 10) - 8, wr_y + 7)
+        ctx.move_to(wr_x + (wr_rad - 10) - 8, wr_y + 6)
         ctx.show_text("E")
-        ctx.move_to(wr_x - 3, wr_y + 4 + (wr_rad - 10) - 2)
+        ctx.move_to(wr_x - 3, wr_y + 3 + (wr_rad - 10) - 2)
         ctx.show_text("S")
-        ctx.move_to(wr_x - (wr_rad - 10) + 2, wr_y + 7)
+        ctx.move_to(wr_x - (wr_rad - 10) + 2, wr_y + 6)
         ctx.show_text("W")
 
-        # Cyan Wind Direction Arrow (Points INWARD from the direction wind comes FROM towards the center)
         w_rad = math.radians(current_wind_dir)
-        w_center_y = wr_y + 4
-        
-        # Base starts near outer ring at the wind source angle (e.g. SSE)
+        w_center_y = wr_y + 3
         w_base_x = wr_x + (wr_rad - 8) * math.sin(w_rad)
         w_base_y = w_center_y - (wr_rad - 8) * math.cos(w_rad)
-        
-        # Tip points inward towards the center
         w_tip_x = wr_x + 5.0 * math.sin(w_rad)
         w_tip_y = w_center_y - 5.0 * math.cos(w_rad)
 
@@ -397,41 +396,147 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.line_to(w_tip_x, w_tip_y)
         ctx.stroke()
 
-        # Inward-pointing arrowhead using vector math
         vx = w_tip_x - w_base_x
         vy = w_tip_y - w_base_y
         L = math.hypot(vx, vy)
         if L > 0:
             ux, uy = vx / L, vy / L
             px, py = -uy, ux
-            arr_len = 9.0
-            arr_width = 5.0
-            
+            arr_len = 8.0
+            arr_width = 4.5
             w1_x = w_tip_x - arr_len * ux + arr_width * px
             w1_y = w_tip_y - arr_len * uy + arr_width * py
             w2_x = w_tip_x - arr_len * ux - arr_width * px
             w2_y = w_tip_y - arr_len * uy - arr_width * py
-
             ctx.move_to(w_tip_x, w_tip_y)
             ctx.line_to(w1_x, w1_y)
             ctx.line_to(w2_x, w2_y)
             ctx.close_path()
             ctx.fill()
 
-        # Wind Speed and Source Direction Subtitle (e.g. "FROM NW (14kn)")
         ctx.set_font_size(9)
         ctx.set_source_rgb(1.0, 1.0, 1.0)
-        card = wind_direction_cardinal(current_wind_dir)
         spd_str = f"{current_wind_speed:.0f}kn" if current_wind_speed is not None else ""
-        txt = f"FROM {card} ({spd_str})"
-        ctx.move_to(wr_x - 30, wr_y + 36)
+        txt = f"FROM {cardinal} ({spd_str})"
+        ctx.move_to(wr_x - 30, wr_y + 32)
         ctx.show_text(txt)
 
-    # 11. Bottom Timestamp Footer
+    # 4. SYNCHRONIZED TWS & TWD TIME-SERIES PLOT
+    ctx.set_source_rgba(0.02, 0.05, 0.09, 0.9)
+    ctx.rectangle(15, chart_top - 20, width - 30, chart_height + 40)
+    ctx.fill()
+    ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
+    ctx.set_line_width(1.0)
+    ctx.rectangle(15, chart_top - 20, width - 30, chart_height + 40)
+    ctx.stroke()
+
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    ctx.set_font_size(12)
+    ctx.set_source_rgb(0.0, 0.9, 1.0)
+    ctx.move_to(chart_left, chart_top - 5)
+    ctx.show_text("— TRUE WIND SPEED (TWS kn)")
+    
+    ctx.set_source_rgb(1.0, 0.75, 0.2)
+    ctx.move_to(chart_left + 220, chart_top - 5)
+    ctx.show_text("--- TRUE WIND DIRECTION (TWD °)")
+
+    plot_y = chart_top + 15
+    plot_h = chart_height - 35
+    plot_bottom = plot_y + plot_h
+
+    max_tws = 20.0
+    if wind_history:
+        max_tws = max(max_tws, max(pt.get("tws", 0.0) for pt in wind_history) * 1.25)
+
+    # Horizontal grid lines
+    ctx.set_line_width(0.75)
+    for i in range(5):
+        ratio = i / 4.0
+        gy = plot_bottom - ratio * plot_h
+        ctx.set_source_rgba(0.2, 0.35, 0.5, 0.3)
+        ctx.move_to(chart_left, gy)
+        ctx.line_to(chart_right, gy)
+        ctx.stroke()
+
+        ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        ctx.set_font_size(10)
+        ctx.set_source_rgb(0.0, 0.85, 0.95)
+        ctx.move_to(chart_left - 32, gy + 4)
+        ctx.show_text(f"{ratio * max_tws:.0f}k")
+
+        deg_val = ratio * 360.0
+        card_label = ["N", "E", "S", "W", "N"][i]
+        ctx.set_source_rgb(1.0, 0.75, 0.2)
+        ctx.move_to(chart_right + 8, gy + 4)
+        ctx.show_text(f"{card_label} ({deg_val:.0f}°)")
+
+    if wind_history and len(wind_history) > 1:
+        t_min = wind_history[0]["time"]
+        t_max = wind_history[-1]["time"]
+        t_span = max(t_max - t_min, 60.0)
+
+        # 1. Fill Area for TWS
+        ctx.set_source_rgba(0.0, 0.8, 1.0, 0.15)
+        first_x = chart_left + ((wind_history[0]["time"] - t_min) / t_span) * chart_width
+        first_y = plot_bottom - (min(wind_history[0]["tws"], max_tws) / max_tws) * plot_h
+        ctx.move_to(first_x, plot_bottom)
+        ctx.line_to(first_x, first_y)
+        for pt in wind_history[1:]:
+            px = chart_left + ((pt["time"] - t_min) / t_span) * chart_width
+            py = plot_bottom - (min(pt["tws"], max_tws) / max_tws) * plot_h
+            ctx.line_to(px, py)
+        ctx.line_to(chart_left + chart_width, plot_bottom)
+        ctx.close_path()
+        ctx.fill()
+
+        # 2. Line for TWS
+        ctx.set_source_rgba(0.0, 0.95, 1.0, 0.95)
+        ctx.set_line_width(2.0)
+        ctx.move_to(first_x, first_y)
+        for pt in wind_history[1:]:
+            px = chart_left + ((pt["time"] - t_min) / t_span) * chart_width
+            py = plot_bottom - (min(pt["tws"], max_tws) / max_tws) * plot_h
+            ctx.line_to(px, py)
+        ctx.stroke()
+
+        # 3. Line for TWD (Dashed Amber with wraparound protection)
+        ctx.set_source_rgba(1.0, 0.75, 0.2, 0.85)
+        ctx.set_line_width(1.5)
+        ctx.set_dash([4.0, 3.0])
+        first_twd_y = plot_bottom - (wind_history[0]["twd"] / 360.0) * plot_h
+        ctx.move_to(first_x, first_twd_y)
+        for i in range(1, len(wind_history)):
+            prev_pt = wind_history[i - 1]
+            cur_pt = wind_history[i]
+            px = chart_left + ((cur_pt["time"] - t_min) / t_span) * chart_width
+            py = plot_bottom - (cur_pt["twd"] / 360.0) * plot_h
+            if abs(cur_pt["twd"] - prev_pt["twd"]) > 180.0:
+                ctx.stroke()
+                ctx.move_to(px, py)
+            else:
+                ctx.line_to(px, py)
+        ctx.stroke()
+        ctx.set_dash([])
+
+        for pt in wind_history:
+            px = chart_left + ((pt["time"] - t_min) / t_span) * chart_width
+            py = plot_bottom - (pt["twd"] / 360.0) * plot_h
+            ctx.set_source_rgba(1.0, 0.8, 0.3, 0.9)
+            ctx.arc(px, py, 2.5, 0, 2 * math.pi)
+            ctx.fill()
+    else:
+        ctx.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_NORMAL)
+        ctx.set_font_size(12)
+        ctx.set_source_rgba(0.5, 0.7, 0.9, 0.6)
+        ctx.move_to(chart_left + 220, plot_y + plot_h / 2.0)
+        ctx.show_text("Collecting real-time wind history (TWS & TWD)...")
+
+    # 5. BOTTOM TIMESTAMP & FOOTER
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
     ctx.set_font_size(11)
     ctx.set_source_rgba(0.5, 0.6, 0.7, 0.8)
-    ctx.move_to(25, height - 18)
+    ctx.move_to(25, height - 12)
     ctx.show_text(f"Cerbo GX Smart Anchor Watch • {now_str} • Lat: {current_lat or 0:.5f}°, Lon: {current_lon or 0:.5f}°")
 
     buf = io.BytesIO()
@@ -705,6 +810,8 @@ class AnchorWatchService:
         self.wind_history = []
         if self.current_lat and self.current_lon:
             self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
+        if self.current_wind_speed is not None and self.current_wind_dir is not None:
+            self.wind_history.append({"tws": self.current_wind_speed, "twd": self.current_wind_dir, "time": time.time()})
         log.info(f"Anchor Armed: Point ({self.anchor_lat:.5f}, {self.anchor_lon:.5f}), Rode: {self.rode_m}m, Radius: {self.alarm_radius_m}m")
 
     def reset_to_heading(self, distance_m=None, radius_m=None):
