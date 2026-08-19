@@ -184,8 +184,7 @@ printf '%s\n' "$CAN_USB_PRODUCT_ID" > "$APP_DIR/CAN_USB_PRODUCT_ID"
 printf '%s\n' "$SWITCH_TX_ENABLED" > "$APP_DIR/SWITCH_TX_ENABLED"
 printf '%s\n' "$SWITCH_RTR_ENABLED" > "$APP_DIR/SWITCH_RTR_ENABLED"
 
-# Install the persistent service links before the first `exit 0`. Older
-# revisions appended the block after `exit 0`, which made it unreachable.
+# Install the persistent service links before the first `exit 0`. Older revisions appended the block after `exit 0`, which made it unreachable.
 # Remove any prior marker blocks wherever they occur, then insert one canonical
 # block immediately before the first exit. Preserve all unrelated rc.local
 # content and append the block if no exit statement exists.
