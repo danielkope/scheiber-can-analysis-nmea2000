@@ -379,35 +379,41 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.move_to(wr_x - (wr_rad - 10) + 2, wr_y + 7)
         ctx.show_text("W")
 
-        # Cyan Wind Direction Arrow (Points in direction wind is blowing TO)
+        # Cyan Wind Direction Arrow (Points INWARD from the direction wind comes FROM towards the center)
         w_rad = math.radians(current_wind_dir)
         w_center_y = wr_y + 4
-        w_tip_x = wr_x + (wr_rad - 12) * math.sin(w_rad)
-        w_tip_y = w_center_y - (wr_rad - 12) * math.cos(w_rad)
-        w_base_x = wr_x - (wr_rad - 18) * math.sin(w_rad)
-        w_base_y = w_center_y + (wr_rad - 18) * math.cos(w_rad)
+        
+        # Base starts near outer ring at the wind source angle (e.g. SSE)
+        w_base_x = wr_x + (wr_rad - 10) * math.sin(w_rad)
+        w_base_y = w_center_y - (wr_rad - 10) * math.cos(w_rad)
+        
+        # Tip points inward towards the center
+        w_tip_x = wr_x + 4.0 * math.sin(w_rad)
+        w_tip_y = w_center_y - 4.0 * math.cos(w_rad)
 
-        ctx.set_source_rgba(0.0, 0.9, 1.0, 0.95)
+        ctx.set_source_rgba(0.0, 0.95, 1.0, 0.95)
         ctx.set_line_width(2.5)
         ctx.move_to(w_base_x, w_base_y)
         ctx.line_to(w_tip_x, w_tip_y)
         ctx.stroke()
 
-        # Arrow head
+        # Inward-pointing arrow head at the tip
         arr_size = 7.0
+        # Inward angle is (w_rad + pi)
+        inward_rad = w_rad + math.pi
         ctx.move_to(w_tip_x, w_tip_y)
-        ctx.line_to(w_tip_x - arr_size * math.sin(w_rad - 0.5), w_tip_y + arr_size * math.cos(w_rad - 0.5))
-        ctx.line_to(w_tip_x - arr_size * math.sin(w_rad + 0.5), w_tip_y + arr_size * math.cos(w_rad + 0.5))
+        ctx.line_to(w_tip_x + arr_size * math.sin(inward_rad - 0.5), w_tip_y - arr_size * math.cos(inward_rad - 0.5))
+        ctx.line_to(w_tip_x + arr_size * math.sin(inward_rad + 0.5), w_tip_y - arr_size * math.cos(inward_rad + 0.5))
         ctx.close_path()
         ctx.fill()
 
-        # Wind Speed and Angle Subtitle
+        # Wind Speed and Source Direction Subtitle (e.g. "FROM 14kn NW")
         ctx.set_font_size(9)
         ctx.set_source_rgb(1.0, 1.0, 1.0)
         card = wind_direction_cardinal(current_wind_dir)
         spd_str = f"{current_wind_speed:.0f}kn" if current_wind_speed is not None else ""
-        txt = f"{spd_str} {card}"
-        ctx.move_to(wr_x - 18, wr_y + 36)
+        txt = f"FROM {card} ({spd_str})"
+        ctx.move_to(wr_x - 30, wr_y + 36)
         ctx.show_text(txt)
 
     # 11. Bottom Timestamp Footer
