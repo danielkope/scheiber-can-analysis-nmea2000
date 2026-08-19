@@ -287,15 +287,69 @@ Field photographs and Cerbo screenshots are kept in [`INTEGRATION_RESULTS.md`](I
 - native Victron generator control backed by the Scheiber bridge;
 - the individual Scheiber house-battery services in the Cerbo UI.
 
-## Troubleshooting decision tree
+## Troubleshooting Decision Tree & Runbook Checklist
 
-Use this order; do not change multiple layers at once.
+### Incident Post-Mortem: CAN Port Remapping & N2K Gateway Output
 
-1. **Scheiber decode:** confirm `0x02040580` is changing and `bridge.py` is healthy.
-2. **Victron D-Bus:** confirm all three `com.victronenergy.tank.scheiber_*` services and correct capacities.
-3. **Signal K Venus input:** confirm `.90/.91/.92` with `venus.*` sources.
-4. **Native NMEA output:** confirm `.6/.7/.8` loopback with `(127505)` via `n2k-on-ve.can-socket`.
-5. **Zeus3:** if step 4 passes, select the correct incoming fluid-level sources on the B&G.
+During testing, two distinct issues caused tank and SmartShunt data to disappear from the B&G Zeus3 chartplotter:
+
+1. **CAN Interface Assignment**:
+   - `can0` is the USB-CAN adapter (`gs_usb`, Scheiber bus).
+   - `can1` is the built-in VE.Can / NMEA 2000 port (`sun4i_can`, vessel N2K backbone).
+   - Signal K's provider was defaulting to `can0` instead of `can1`.
+2. **Victron VE.Can Gateway Output Disabled on `can1`**:
+   - Victron's native VE.Can setting had `Vecan/can0/N2kGatewayEnabled = 1` and `Vecan/can1/N2kGatewayEnabled = 0`.
+   - As a result, Victron was exporting the SmartShunt (`PGN 127506/127508`), Solar Chargers, and Inverters to the Scheiber bus (`can0`) and disabling all output to the actual N2K network (`can1`).
+
+### Quick Inspection Runbook (If CAN Ports Remap Again)
+
+Follow these steps in order if NMEA 2000 data disappears or CAN ports remap after a hardware change:
+
+#### Step 1: Identify Physical CAN Bus Roles
+Run `candump` on both interfaces to confirm which is Scheiber and which is NMEA 2000:
+```bash
+# Scheiber bus shows 0x02040580, 0x00001008, 0x00001020, 0x02040898:
+candump -n 5 can0
+
+# NMEA 2000 bus shows fast packets from B&G (0x09F8010A, 0x0DF11309, 0x09F11209):
+candump -n 5 can1
+```
+
+#### Step 2: Verify & Fix Victron VE.Can Gateway Settings
+Ensure `can1` is the active N2K gateway in Venus OS:
+```bash
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/N2kGatewayEnabled SetValue 1
+dbus -y com.victronenergy.settings /Settings/Vecan/can0/N2kGatewayEnabled SetValue 0
+svc -t /service/vecan-dbus.can1
+```
+
+#### Step 3: Verify Signal K Interface
+Ensure `/data/conf/signalk/settings.json` points to `can1`:
+```bash
+jq '.pipedProviders[] | select(.id == "n2k-on-ve.can-socket") | .pipeElements[].options.subOptions.interface' /data/conf/signalk/settings.json
+# Should return "can1"
+```
+
+#### Step 4: Verify NMEA 2000 Gateway Service (`scheiber-n2k`)
+Ensure `/service/scheiber-n2k` is actively broadcasting standard PGNs on `can1`:
+```bash
+# Check service process
+ps | grep -i nmea2000_bridge
+
+# Monitor live PGN broadcasts from address 0x69 (105)
+python3 /tmp/monitor_n2k.py
+```
+
+Expected output:
+* `PGN 127505` (Fluid Level): Fresh Water (Inst 0, 600L), Diesel 1 (Inst 0, 500L), Diesel 2 (Inst 1, 500L)
+* `PGN 127508` (Battery Status): Port (Inst 0), Starboard (Inst 1), Generator (Inst 2)
+* `PGN 127501` (Binary Switch Bank): Bank 0 (15 Channels)
+
+#### Step 5: Refresh Chartplotter Data Sources (B&G Zeus3)
+On the B&G Zeus3 screen:
+1. Navigate to **Settings &rarr; Network &rarr; Sources**.
+2. Tap **Auto Select** to re-bind to the newly claimed N2K dynamic source addresses.
+3. Under **Fuel** and **Fresh Water**, ensure Tank 1, Tank 2, and Water are assigned to the Cerbo GX.
 
 A Signal K server restart is normally unnecessary when the REST tree is updating and PGN 127505 loopback is fresh.
 
