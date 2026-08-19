@@ -207,10 +207,20 @@ do
 done
 ```
 
-The tank services publish Victron D-Bus volume values in cubic metres while the
-text formatter presents litres. Signal K/NMEA 2000 guidance remains in
-[`../docs/SIGNALK_NMEA2000.md`](../docs/SIGNALK_NMEA2000.md).
+## Node-RED Anchor Light Sunset/Sunrise automation
+
+The repository includes a ready-to-use Node-RED flow for Anchor Light Auto mode:
+[`node-red-anchor-light-flow.json`](./node-red-anchor-light-flow.json).
+
+### Behavior
+- Listens to `/SwitchableOutput/anchor_light/Auto` on `com.victronenergy.switch.scheiber`.
+- When `Auto = 0` (Manual), the flow is inactive and preserves manual switch control.
+- When `Auto = 1` (Auto mode):
+  - Reads GPS position from `com.victronenergy.gps` (`/Position/Latitude`, `/Position/Longitude`) with fallback coordinates.
+  - Computes astronomical sunrise and sunset times (NOAA solar algorithm).
+  - Automatically commands `/SwitchableOutput/anchor_light/State` to `1` (ON) at sunset (15 min buffer) and `0` (OFF) at sunrise (30 min buffer).
+  - Prevents command loops by only writing to D-Bus when state changes are needed.
 
 Read [`../docs/SWITCH_SERVICE_HANDOVER.md`](../docs/SWITCH_SERVICE_HANDOVER.md)
 for the architecture, safety rules, field evidence, rollback procedure, and
-future Node-RED alarm/automation plan.
+Node-RED alarm/automation plan.

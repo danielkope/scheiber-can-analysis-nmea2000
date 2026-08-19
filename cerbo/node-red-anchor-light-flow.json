@@ -1,0 +1,315 @@
+[
+  {
+    "id": "anchor_light_auto_tab",
+    "type": "tab",
+    "label": "Anchor Light Auto",
+    "disabled": false,
+    "info": "Automatic sunset/sunrise controller for Scheiber Anchor Light."
+  },
+  {
+    "id": "node_in_anchor_auto",
+    "type": "victron-input-switch",
+    "z": "anchor_light_auto_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/SwitchableOutput/anchor_light/Auto",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/SwitchableOutput/anchor_light/Auto",
+      "type": "enum",
+      "name": "Anchor Light auto mode"
+    },
+    "initial": "",
+    "name": "Anchor Light Auto Mode",
+    "onlyChanges": false,
+    "x": 170,
+    "y": 100,
+    "wires": [
+      [
+        "node_change_auto_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_change_auto_topic",
+    "type": "change",
+    "z": "anchor_light_auto_tab",
+    "name": "topic = auto",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "auto",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 410,
+    "y": 100,
+    "wires": [
+      [
+        "node_anchor_solar_calc"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_anchor_state",
+    "type": "victron-input-switch",
+    "z": "anchor_light_auto_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/SwitchableOutput/anchor_light/State",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/SwitchableOutput/anchor_light/State",
+      "type": "enum",
+      "name": "Anchor Light state"
+    },
+    "initial": "",
+    "name": "Anchor Light State",
+    "onlyChanges": false,
+    "x": 160,
+    "y": 160,
+    "wires": [
+      [
+        "node_change_state_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_change_state_topic",
+    "type": "change",
+    "z": "anchor_light_auto_tab",
+    "name": "topic = state",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "state",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 410,
+    "y": 160,
+    "wires": [
+      [
+        "node_anchor_solar_calc"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_gps_lat",
+    "type": "victron-input-gps",
+    "z": "anchor_light_auto_tab",
+    "service": "com.victronenergy.gps/0",
+    "path": "/Position/Latitude",
+    "serviceObj": {
+      "service": "com.victronenergy.gps/0",
+      "name": "GPS"
+    },
+    "pathObj": {
+      "path": "/Position/Latitude",
+      "type": "float",
+      "name": "Latitude"
+    },
+    "initial": "",
+    "name": "GPS Latitude",
+    "onlyChanges": true,
+    "x": 150,
+    "y": 220,
+    "wires": [
+      [
+        "node_change_lat_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_change_lat_topic",
+    "type": "change",
+    "z": "anchor_light_auto_tab",
+    "name": "topic = lat",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "lat",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 410,
+    "y": 220,
+    "wires": [
+      [
+        "node_anchor_solar_calc"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_gps_lon",
+    "type": "victron-input-gps",
+    "z": "anchor_light_auto_tab",
+    "service": "com.victronenergy.gps/0",
+    "path": "/Position/Longitude",
+    "serviceObj": {
+      "service": "com.victronenergy.gps/0",
+      "name": "GPS"
+    },
+    "pathObj": {
+      "path": "/Position/Longitude",
+      "type": "float",
+      "name": "Longitude"
+    },
+    "initial": "",
+    "name": "GPS Longitude",
+    "onlyChanges": true,
+    "x": 150,
+    "y": 280,
+    "wires": [
+      [
+        "node_change_lon_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_change_lon_topic",
+    "type": "change",
+    "z": "anchor_light_auto_tab",
+    "name": "topic = lon",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "lon",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 410,
+    "y": 280,
+    "wires": [
+      [
+        "node_anchor_solar_calc"
+      ]
+    ]
+  },
+  {
+    "id": "node_inject_tick",
+    "type": "inject",
+    "z": "anchor_light_auto_tab",
+    "name": "Check Every 1 Min",
+    "props": [
+      {
+        "p": "topic",
+        "v": "tick",
+        "vt": "str"
+      },
+      {
+        "p": "payload",
+        "v": "",
+        "vt": "date"
+      }
+    ],
+    "repeat": "60",
+    "crontab": "",
+    "once": true,
+    "onceDelay": 2.0,
+    "topic": "tick",
+    "x": 170,
+    "y": 340,
+    "wires": [
+      [
+        "node_anchor_solar_calc"
+      ]
+    ]
+  },
+  {
+    "id": "node_anchor_solar_calc",
+    "type": "function",
+    "z": "anchor_light_auto_tab",
+    "name": "Sunset/Sunrise Anchor Controller",
+    "func": "// Function: Sunset/Sunrise Anchor Controller\n// Tracks position (GPS / default), Auto mode, and switches Anchor Light automatically at Sunset/Sunrise with buffers.\n\nconst ON_BUFFER_MIN = 15;   // Turn ON 15 minutes before sunset\nconst OFF_BUFFER_MIN = 30;  // Turn OFF 30 minutes after sunrise\n\n// Default fallback coordinates if GPS is unavailable\nconst DEFAULT_LAT = 43.5;   // Mediterranean / Adriatic cruising ground\nconst DEFAULT_LON = 16.2;\n\nif (msg.topic === 'auto') {\n    const autoVal = Number(msg.payload) === 1 ? 1 : 0;\n    context.set('auto_mode', autoVal);\n} else if (msg.topic === 'state') {\n    const stateVal = Number(msg.payload) === 1 ? 1 : 0;\n    context.set('current_state', stateVal);\n} else if (msg.topic === 'lat' && typeof msg.payload === 'number' && !isNaN(msg.payload) && msg.payload >= -90 && msg.payload <= 90) {\n    context.set('latitude', msg.payload);\n} else if (msg.topic === 'lon' && typeof msg.payload === 'number' && !isNaN(msg.payload) && msg.payload >= -180 && msg.payload <= 180) {\n    context.set('longitude', msg.payload);\n}\n\nconst autoMode = context.get('auto_mode') === 1;\nconst currentState = context.get('current_state');\nconst lat = typeof context.get('latitude') === 'number' ? context.get('latitude') : DEFAULT_LAT;\nconst lon = typeof context.get('longitude') === 'number' ? context.get('longitude') : DEFAULT_LON;\n\nif (!autoMode) {\n    node.status({ fill: \"grey\", shape: \"ring\", text: \"Manual Mode (Auto disabled)\" });\n    return null;\n}\n\nfunction calcSunTimes(d, latDeg, lonDeg) {\n    const rad = Math.PI / 180;\n    const deg = 180 / Math.PI;\n    const start = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));\n    const dayOfYear = Math.floor((d - start) / 86400000) + 1;\n    const gamma = 2 * Math.PI / 365 * (dayOfYear - 1 + 0.5);\n    const eqtime = 229.18 * (0.000075 + 0.001868 * Math.cos(gamma) - 0.032077 * Math.sin(gamma)\n                           - 0.014615 * Math.cos(2 * gamma) - 0.040849 * Math.sin(2 * gamma));\n    const decl = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma)\n               - 0.006758 * Math.cos(2 * gamma) + 0.000907 * Math.sin(2 * gamma)\n               - 0.002697 * Math.cos(3 * gamma) + 0.00148 * Math.sin(3 * gamma);\n    const zenith = 90.833 * rad;\n    const cosHA = (Math.cos(zenith) / (Math.cos(latDeg * rad) * Math.cos(decl))) - (Math.tan(latDeg * rad) * Math.tan(decl));\n    if (cosHA > 1) return { polarNight: true };\n    if (cosHA < -1) return { midnightSun: true };\n    const ha = Math.acos(cosHA) * deg;\n    const sunriseMin = 720 - 4 * (lonDeg + ha) - eqtime;\n    const sunsetMin = 720 - 4 * (lonDeg - ha) - eqtime;\n    const sunrise = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, sunriseMin, 0));\n    const sunset = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, sunsetMin, 0));\n    return { sunrise, sunset };\n}\n\nconst now = new Date();\nconst today = calcSunTimes(now, lat, lon);\nconst yesterday = calcSunTimes(new Date(now.getTime() - 86400000), lat, lon);\n\nlet isNight = false;\nif (today.polarNight) {\n    isNight = true;\n} else if (today.midnightSun) {\n    isNight = false;\n} else {\n    const todaySunsetBuffered = new Date(today.sunset.getTime() - ON_BUFFER_MIN * 60000);\n    const todaySunriseBuffered = new Date(today.sunrise.getTime() + OFF_BUFFER_MIN * 60000);\n    const yesterdaySunsetBuffered = new Date(yesterday.sunset.getTime() - ON_BUFFER_MIN * 60000);\n    \n    if (now >= todaySunsetBuffered || now < todaySunriseBuffered || (now >= yesterdaySunsetBuffered && now < todaySunriseBuffered)) {\n        isNight = true;\n    }\n}\n\nconst desiredState = isNight ? 1 : 0;\n\nfunction formatHHMM(d) {\n    return (\"0\" + d.getUTCHours()).slice(-2) + \":\" + (\"0\" + d.getUTCMinutes()).slice(-2) + \" UTC\";\n}\n\nconst gpsText = (typeof context.get('latitude') === 'number') ? \"GPS (\" + lat.toFixed(2) + \",\" + lon.toFixed(2) + \")\" : \"Default (\" + lat + \",\" + lon + \")\";\n\nif (isNight) {\n    node.status({ fill: \"blue\", shape: \"dot\", text: \"Auto ON (Night: Sunset ~\" + (today.sunset ? formatHHMM(today.sunset) : \"\") + \" | \" + gpsText + \")\" });\n} else {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"Auto OFF (Day: Sunrise ~\" + (today.sunrise ? formatHHMM(today.sunrise) : \"\") + \" | \" + gpsText + \")\" });\n}\n\nif (desiredState !== currentState) {\n    context.set('current_state', desiredState);\n    return {\n        payload: desiredState,\n        topic: \"anchor_light_state\",\n        reason: isNight ? \"Sunset trigger\" : \"Sunrise trigger\",\n        location: { lat, lon, source: (typeof context.get('latitude') === 'number' ? 'gps' : 'default') },\n        times: today\n    };\n}\n\nreturn null;\n",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 680,
+    "y": 220,
+    "wires": [
+      [
+        "node_out_anchor_state",
+        "node_debug_anchor"
+      ]
+    ]
+  },
+  {
+    "id": "node_out_anchor_state",
+    "type": "victron-output-switch",
+    "z": "anchor_light_auto_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/SwitchableOutput/anchor_light/State",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/SwitchableOutput/anchor_light/State",
+      "type": "enum",
+      "name": "Anchor Light state",
+      "enum": {
+        "0": "Off",
+        "1": "On"
+      },
+      "writable": true
+    },
+    "initial": "",
+    "name": "Set Anchor Light State",
+    "onlyChanges": false,
+    "x": 980,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "node_debug_anchor",
+    "type": "debug",
+    "z": "anchor_light_auto_tab",
+    "name": "Anchor Auto Events",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 960,
+    "y": 260,
+    "wires": []
+  }
+]
