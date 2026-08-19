@@ -101,6 +101,31 @@ def test_quick_menu_structure():
     buttons = [btn["text"] for row in menu["inline_keyboard"] for btn in row]
     assert any("Drop" in b for b in buttons)
     assert any("Reset" in b for b in buttons)
-    assert any("+5m" in b for b in buttons)
+    assert any("Rode" in b for b in buttons)
+    assert any("Radius" in b for b in buttons)
     assert any("Status" in b for b in buttons)
     assert any("Disarm" in b for b in buttons)
+
+
+def test_rode_and_radius_adjustments():
+    svc = aws.AnchorWatchService(config_path="/tmp/nonexistent_config.json")
+    svc.rode_m = 35.0
+    svc.alarm_radius_m = 45.0
+
+    # Increase rode
+    svc.handle_callback_query({"data": "rode_plus", "message": {"chat": {"id": 12345}}})
+    assert svc.rode_m == 40.0
+    assert svc.alarm_radius_m == 50.0
+
+    # Decrease rode
+    svc.handle_callback_query({"data": "rode_minus", "message": {"chat": {"id": 12345}}})
+    assert svc.rode_m == 35.0
+    assert svc.alarm_radius_m == 45.0
+
+    # Increase radius independently
+    svc.handle_callback_query({"data": "radius_plus", "message": {"chat": {"id": 12345}}})
+    assert svc.alarm_radius_m == 50.0
+
+    # Decrease radius
+    svc.handle_callback_query({"data": "radius_minus", "message": {"chat": {"id": 12345}}})
+    assert svc.alarm_radius_m == 45.0

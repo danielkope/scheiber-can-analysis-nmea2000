@@ -314,16 +314,20 @@ class AnchorWatchService:
             log.error(f"Failed to set Scheiber switch {channel}: {e}")
 
     def build_quick_menu(self):
-        """Construct interactive Telegram inline keypad."""
+        """Construct interactive Telegram inline keypad with dynamic values."""
         return {
             "inline_keyboard": [
                 [
-                    {"text": "⚓ Drop (35m)", "callback_data": "drop_35"},
+                    {"text": "⚓ Drop Anchor", "callback_data": "drop_current"},
                     {"text": "🔄 Reset to Heading", "callback_data": "reset_heading"}
                 ],
                 [
-                    {"text": "➕ +5m Radius", "callback_data": "radius_plus"},
-                    {"text": "➖ -5m Radius", "callback_data": "radius_minus"}
+                    {"text": f"⛓️ +5m Rode ({self.rode_m:.0f}m)", "callback_data": "rode_plus"},
+                    {"text": f"⛓️ -5m Rode ({self.rode_m:.0f}m)", "callback_data": "rode_minus"}
+                ],
+                [
+                    {"text": f"⭕ +5m Radius ({self.alarm_radius_m:.0f}m)", "callback_data": "radius_plus"},
+                    {"text": f"⭕ -5m Radius ({self.alarm_radius_m:.0f}m)", "callback_data": "radius_minus"}
                 ],
                 [
                     {"text": "📊 Status & Map", "callback_data": "status"},
@@ -396,11 +400,11 @@ class AnchorWatchService:
         data = query.get("data", "")
         chat_id = query.get("message", {}).get("chat", {}).get("id")
 
-        if data == "drop_35":
+        if data in ("drop_current", "drop_35"):
             self.poll_sensors()
             if self.current_lat and self.current_lon:
-                self.arm_anchor_point(self.current_lat, self.current_lon, rode_m=35.0)
-                msg = f"⚓ <b>Anchor Dropped at Current GPS!</b>\nRadius: {self.alarm_radius_m:.0f} m"
+                self.arm_anchor_point(self.current_lat, self.current_lon, rode_m=self.rode_m)
+                msg = f"⚓ <b>Anchor Dropped at Current GPS!</b>\n• Rode Length: <b>{self.rode_m:.0f} m</b>\n• Alarm Radius: <b>{self.alarm_radius_m:.0f} m</b>"
             else:
                 msg = "❌ GPS position not available."
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
@@ -409,19 +413,31 @@ class AnchorWatchService:
             ok, res = self.reset_to_heading()
             if ok:
                 lat, lon, d, r, hdg = res
-                msg = f"🔄 <b>Anchor Reset to Heading {hdg:.0f}°!</b>\nDistance: {d:.0f} m | Radius: {r:.0f} m"
+                msg = f"🔄 <b>Anchor Reset to Heading {hdg:.0f}°!</b>\n• Chain Distance: <b>{d:.0f} m</b>\n• Alarm Radius: <b>{r:.0f} m</b>\n• Anchor GPS: <code>{lat:.5f}°, {lon:.5f}°</code>"
             else:
                 msg = f"❌ {res}"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
+        elif data == "rode_plus":
+            self.rode_m += 5.0
+            self.alarm_radius_m = self.rode_m + self.config.get("default_safety_margin_m", 10.0)
+            msg = f"⛓️ <b>Rode Distance Increased:</b>\n• Chain Rode: <b>{self.rode_m:.0f} m</b>\n• Alarm Radius: <b>{self.alarm_radius_m:.0f} m</b>"
+            self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
+
+        elif data == "rode_minus":
+            self.rode_m = max(5.0, self.rode_m - 5.0)
+            self.alarm_radius_m = self.rode_m + self.config.get("default_safety_margin_m", 10.0)
+            msg = f"⛓️ <b>Rode Distance Decreased:</b>\n• Chain Rode: <b>{self.rode_m:.0f} m</b>\n• Alarm Radius: <b>{self.alarm_radius_m:.0f} m</b>"
+            self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
+
         elif data == "radius_plus":
             self.alarm_radius_m += 5.0
-            msg = f"➕ <b>Alarm Radius Increased to {self.alarm_radius_m:.0f} m</b>"
+            msg = f"⭕ <b>Alarm Radius Increased to {self.alarm_radius_m:.0f} m</b> (Rode: {self.rode_m:.0f} m)"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "radius_minus":
             self.alarm_radius_m = max(10.0, self.alarm_radius_m - 5.0)
-            msg = f"➖ <b>Alarm Radius Decreased to {self.alarm_radius_m:.0f} m</b>"
+            msg = f"⭕ <b>Alarm Radius Decreased to {self.alarm_radius_m:.0f} m</b> (Rode: {self.rode_m:.0f} m)"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "status":
