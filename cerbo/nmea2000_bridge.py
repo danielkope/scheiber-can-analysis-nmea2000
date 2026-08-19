@@ -5,7 +5,7 @@ Publishes:
   1. PGN 127505 (Fluid Level) for Fresh Water (Inst 0, Water), Diesel 1 (Inst 0, Fuel), Diesel 2 (Inst 1, Fuel).
   2. PGN 127508 (Battery Status) for Port Starter, Starboard Starter, and Generator Starter batteries.
   3. PGN 127501 (Binary Switch Bank Status) for all 15 Scheiber Multibloc V8 switch channels.
-  4. PGN 126996 (Product Information) & PGN 126998 (Configuration Information) on ISO Request.
+  4. PGN 60928 (ISO Address Claim), PGN 126464 (PGN List), PGN 126996 (Product Information), PGN 126998 (Configuration Information).
 Consumes:
   1. PGN 127502 (Binary Switch Bank Control) from B&G Zeus3 chartplotter and updates D-Bus switch states.
 """
@@ -59,13 +59,7 @@ def build_name_u64(uniq_id, mfg_code, dev_inst, dev_func, dev_class, sys_inst, i
 
 
 def encode_pgn127505_fluid_level(fluid_inst, fluid_type, level_pct, capacity_m3=None):
-    """Encode standard NMEA 2000 PGN 127505 (Fluid Level).
-    
-    Byte 0: (fluid_inst << 4) | (fluid_type & 0x0F)
-    Bytes 1-2: Level (uint16 LE, 0.004 % per bit, 0..25000 -> 0..100.0%)
-    Bytes 3-6: Capacity (uint32 LE, 0.1 L per bit / 0.0001 m3 per bit, 0xFFFFFFFF = unknown)
-    Byte 7: Reserved (0xFF)
-    """
+    """Encode standard NMEA 2000 PGN 127505 (Fluid Level)."""
     byte0 = ((int(fluid_inst) & 0x0F) << 4) | (int(fluid_type) & 0x0F)
     
     # Level: 0.004% per bit (level_pct * 250)
@@ -122,7 +116,22 @@ def decode_pgn127502_switch_control(payload):
     return bank_inst, commands
 
 
-def encode_pgn126996_product_info(model_id="Scheiber Gateway", sw_ver="v2.0", model_ver="Cerbo GX", serial="HQ23013MZC2"):
+def encode_pgn126464_pgn_list(list_type=0):
+    """Encode PGN 126464 (PGN List).
+    list_type: 0 = Transmit PGN list, 1 = Receive PGN list
+    """
+    if list_type == 0:
+        pgns = [59392, 59904, 60928, 126464, 126996, 126998, 127501, 127505, 127508]
+    else:
+        pgns = [59392, 59904, 127502]
+        
+    payload = bytearray([list_type & 0xFF])
+    for p in pgns:
+        payload.extend([p & 0xFF, (p >> 8) & 0xFF, (p >> 16) & 0xFF])
+    return bytes(payload)
+
+
+def encode_pgn126996_product_info(model_id="Scheiber Switch Gateway", sw_ver="v2.0", model_ver="Cerbo GX", serial="HQ23013MZC2"):
     """Encode PGN 126996 Product Information (134 bytes)."""
     n2k_ver = 2101
     prod_code = 358
@@ -192,7 +201,7 @@ class Nmea2000Bridge:
         self.fast_seq = 0
         
         self.init_socket()
-        self.claim_address(verbose=True)
+        self.claim_address(dest=0xFF, verbose=True)
         self.init_dbus_watch()
         
         self.GLib.io_add_watch(self.sock.fileno(), self.GLib.IO_IN, self.on_can_frame)
@@ -202,7 +211,8 @@ class Nmea2000Bridge:
     def init_socket(self):
         self.sock = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
         try:
-            self.sock.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_LOOPBACK, 0)
+            self.sock.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_LOOPBACK, 1)
+            self.sock.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_RECV_OWN_MSGS, 0)
         except Exception:
             pass
         self.sock.bind((self.iface,))
@@ -217,9 +227,14 @@ class Nmea2000Bridge:
         except Exception as e:
             print(f"[N2K Bridge] Error sending CAN frame 0x{can_id:08X}: {e}", flush=True)
 
-    def send_fast_packet(self, pgn, payload_bytes, priority=6):
+    def send_fast_packet(self, pgn, payload_bytes, priority=6, dest=0xFF):
         """Transmit Fast-Packet NMEA 2000 multi-frame PGN."""
-        can_id_base = (priority << 26) | (pgn << 8) | self.addr
+        pf = (pgn >> 8) & 0xFF
+        if pf < 240:
+            can_id_base = (priority << 26) | (pf << 16) | ((dest & 0xFF) << 8) | self.addr
+        else:
+            can_id_base = (priority << 26) | (pgn << 8) | self.addr
+            
         total_len = len(payload_bytes)
         fast_seq_bits = (self.fast_seq & 0x07) << 5
         self.fast_seq = (self.fast_seq + 1) & 0x07
@@ -239,13 +254,13 @@ class Nmea2000Bridge:
             offset += len(chunk)
             frame_idx += 1
 
-    def claim_address(self, verbose=False):
-        # PGN 60928 (0xEE00): Priority 6, Broadcast -> 0x18EEFFxx
-        can_id = (6 << 26) | (0xEE00 << 8) | self.addr
+    def claim_address(self, dest=0xFF, verbose=False):
+        # PGN 60928 (0x00EE00): Priority 6, Broadcast -> 0x18EEFFxx
+        can_id = (6 << 26) | (0xEE << 16) | ((dest & 0xFF) << 8) | self.addr
         self.send_can_frame(can_id, self.name_bytes)
         self.claimed = True
         if verbose:
-            print(f"[N2K Bridge] Claimed NMEA 2000 address {self.addr} on {self.iface}", flush=True)
+            print(f"[N2K Bridge] Claimed NMEA 2000 address {self.addr} (0x{self.addr:02X}) on {self.iface}", flush=True)
 
     def init_dbus_watch(self):
         self.refresh_switch_states()
@@ -299,7 +314,6 @@ class Nmea2000Bridge:
                     except Exception:
                         pass
                     payload = encode_pgn127505_fluid_level(fluid_inst, fluid_type, float(lvl), cap)
-                    # PGN 127505 (0x1F211): Priority 6, Broadcast -> 0x19F211xx
                     can_id = (6 << 26) | (0x1F211 << 8) | self.addr
                     self.send_can_frame(can_id, payload)
             except Exception:
@@ -319,9 +333,9 @@ class Nmea2000Bridge:
                 pass
         self.seq_id = (self.seq_id + 1) & 0xFF
 
-    def publish_switch_bank_status(self):
-        """Publish PGN 127501 (Binary Switch Bank Status) for Bank 0."""
-        payload = encode_pgn127501_switch_bank(self.switch_states, 0)
+    def publish_switch_bank_status(self, bank_inst=1):
+        """Publish PGN 127501 (Binary Switch Bank Status) for Bank 1 (avoiding NAC-3 Bank 0 collision)."""
+        payload = encode_pgn127501_switch_bank(self.switch_states, bank_inst)
         # Standard N2K priority for PGN 127501 is 3 (0x0DF20Dxx)
         can_id = (3 << 26) | (0x1F20D << 8) | self.addr
         self.send_can_frame(can_id, payload)
@@ -329,7 +343,7 @@ class Nmea2000Bridge:
     def handle_switch_bank_control(self, payload):
         """Handle incoming PGN 127502 (Binary Switch Bank Control) from B&G Zeus3."""
         bank_inst, commands = decode_pgn127502_switch_control(payload)
-        if bank_inst != 0:
+        if bank_inst not in (0, 1):
             return
             
         for ch, cmd in commands.items():
@@ -368,13 +382,16 @@ class Nmea2000Bridge:
                 if len(payload) >= 3:
                     req_pgn = payload[0] | (payload[1] << 8) | (payload[2] << 16)
                     if req_pgn == 60928:
-                        self.claim_address()
+                        self.claim_address(dest=0xFF)
+                    elif req_pgn == 126464:
+                        self.send_fast_packet(126464, encode_pgn126464_pgn_list(0), dest=src)
+                        self.send_fast_packet(126464, encode_pgn126464_pgn_list(1), dest=src)
                     elif req_pgn == 126996:
                         prod_payload = encode_pgn126996_product_info()
-                        self.send_fast_packet(126996, prod_payload)
+                        self.send_fast_packet(126996, prod_payload, dest=src)
                     elif req_pgn == 126998:
                         cfg_payload = encode_pgn126998_config_info()
-                        self.send_fast_packet(126998, cfg_payload)
+                        self.send_fast_packet(126998, cfg_payload, dest=src)
                     elif req_pgn == 127501:
                         self.publish_switch_bank_status()
                     elif req_pgn == 127505:
@@ -390,7 +407,7 @@ class Nmea2000Bridge:
                 if remote_name < self.name_u64:
                     self.addr = (self.addr + 1) if self.addr < 250 else 100
                     print(f"[N2K Bridge] Address conflict with 0x{remote_name:016X}; changing address to {self.addr}", flush=True)
-                    self.claim_address(verbose=True)
+                    self.claim_address(dest=0xFF, verbose=True)
                     
             # PGN 127502 (Binary Switch Bank Control - 0x1F20E)
             elif pgn == 127502 and (dest == self.addr or dest == 0xFF):

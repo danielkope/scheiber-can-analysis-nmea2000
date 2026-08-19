@@ -85,3 +85,12 @@ def test_encode_pgn126996_product_info():
 def test_encode_pgn126998_config_info():
     payload = n2k_bridge.encode_pgn126998_config_info("Fresh Water", "Diesel", "Victron")
     assert len(payload) > 0
+
+def test_encode_pgn126464_pgn_list():
+    tx_list = n2k_bridge.encode_pgn126464_pgn_list(0)
+    assert tx_list[0] == 0
+    assert len(tx_list) == 1 + 9 * 3
+    
+    rx_list = n2k_bridge.encode_pgn126464_pgn_list(1)
+    assert rx_list[0] == 1
+    assert len(rx_list) == 1 + 3 * 3
