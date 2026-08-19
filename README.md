@@ -41,6 +41,9 @@ It publishes:
 
 ```text
 com.victronenergy.genset.scheiber
+com.victronenergy.grid.scheiber_shore
+com.victronenergy.inverter.scheiber_mastervolt
+com.victronenergy.switch.scheiber
 ```
 
 which Victron's normal `dbus-generator` service matches to a connected-genset manager (`com.victronenergy.generator.startstop1`). Native Victron manual starts, automatic conditions, timed runs, runtime accounting, and stop commands therefore remain manager-owned rather than being reimplemented in the bridge.
@@ -50,11 +53,9 @@ The complete canonical runtime source is checked in directly as [`cerbo/bridge.p
 Current bridge:
 
 ```text
-version 5.4.2
-SHA-256 6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+version 5.8.0
+SHA-256 cf5f4eda6e170297bb4210c308df554b193cfef8dbb1804495a5a589eec91815
 ```
-
-Version 5.4.2 preserves the field-tested v5.4.1 generator/CAN behavior and corrects the Victron tank-volume D-Bus units. The v5.4.1 field-tested source SHA-256 is retained in `config/system_config.json` for provenance.
 
 ### Fresh install or update
 

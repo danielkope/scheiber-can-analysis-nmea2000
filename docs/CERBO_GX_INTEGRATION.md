@@ -19,24 +19,16 @@ Canonical runtime source:
 
 ```text
 cerbo/bridge.py
-version 5.4.2
-SHA-256 6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+version 5.8.0
+SHA-256 cf5f4eda6e170297bb4210c308df554b193cfef8dbb1804495a5a589eec91815
 ```
-
-The field-tested v5.4.1 source SHA-256 was:
-
-```text
-b7acb294467147a50166ac1468fe64de37c8a0facca920f3d0e8f2f89ee5a5c1
-```
-
-Bridge 5.4.2 preserves the field-tested v5.4.1 generator/CAN behavior and makes one runtime correction: Victron tank `/Capacity` and `/Remaining` are now published in cubic metres instead of litres.
-
-The complete production script is checked into the repository directly. There is no encoded source, assembler, generated runtime source, or install-time source patching.
 
 The bridge publishes:
 
 ```text
 com.victronenergy.genset.scheiber
+com.victronenergy.grid.scheiber_shore
+com.victronenergy.inverter.scheiber_mastervolt
 ```
 
 Victron `dbus-generator` creates the normal connected-genset manager, typically:
@@ -45,7 +37,7 @@ Victron `dbus-generator` creates the normal connected-genset manager, typically:
 com.victronenergy.generator.startstop1
 ```
 
-The bridge also publishes three native Victron tank services and, when the GX system battery is explicitly selected, six house-battery services plus two experimental engine-battery services and the generator starter battery.
+The bridge also publishes three native Victron tank services, native MasterVolt 2000W Inverter and Shore Power services, native switch outputs (`com.victronenergy.switch.scheiber`), and, when the GX system battery is explicitly selected, six house-battery services plus two experimental engine-battery services and the generator starter battery.
 
 ## Safety boundary
 

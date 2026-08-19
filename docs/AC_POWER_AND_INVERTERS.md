@@ -59,18 +59,35 @@ When the MasterVolt Inverter is enabled/disabled at the panel:
 
 ### 2.3 AC Voltage & Frequency Telemetry
 
-| Measurement | CAN Frame ID | Bytes | Scaling | Range |
-|---|---|---|---|---|
-| **House AC Line Voltage** | `0x02040B88` | Bytes 4..5 (BE) | `uint16` Whole Volts | 0 &ndash; 250 V |
-| **House AC Frequency / Status** | `0x02040B88` | Bytes 6..7 (BE) | Diagnostic status / Hz | 0.0 &ndash; 65.0 Hz |
-| **A/C Line Voltage** | `0x02040B90` | Bytes 4..5 (BE) | `uint16` Whole Volts | 0 &ndash; 250 V |
-| **A/C Frequency / Status** | `0x02040B90` | Bytes 6..7 (BE) | Diagnostic status / Hz | 0.0 &ndash; 65.0 Hz |
+| Measurement | CAN Frame ID | Bytes | Scaling | Rate | Range |
+|---|---|---|---|---|---|
+| **House AC Line Voltage (Heartbeat)** | `0x00000B88` | Bytes 2..3 (BE) | `uint16` Whole Volts | Continuous 1 Hz | 0 &ndash; 250 V |
+| **A/C Line Voltage (Heartbeat)** | `0x00000B90` | Bytes 2..3 (BE) | `uint16` Whole Volts | Continuous 1 Hz | 0 &ndash; 250 V |
+| **House AC Extended Telemetry** | `0x02040B88` | Bytes 4..5 (BE) | `uint16` Whole Volts | Periodic / Event | 0 &ndash; 250 V |
+| **A/C Extended Telemetry** | `0x02040B90` | Bytes 4..5 (BE) | `uint16` Whole Volts | Periodic / Event | 0 &ndash; 250 V |
 
 ---
 
 ## 3. D-Bus Integration Paths on Venus OS
 
-All AC telemetry is published under `com.victronenergy.genset.scheiber` on the Cerbo GX system bus:
+### 3.1 Native Victron Device Services
+
+The integration exposes physical AC hardware as native Victron D-Bus device services:
+
+1. **`com.victronenergy.inverter.scheiber_mastervolt`** (MasterVolt 2000W House Inverter &bull; DeviceInstance 270):
+   * `/State`: `9` (Inverting) when active, `0` (Off) when stopped
+   * `/Mode`: `2` (ON), `4` (OFF)
+   * `/Ac/Out/L1/V`: Measured House AC line voltage (`230.0 V`)
+   * `/Dc/0/Voltage`: House battery supply voltage
+2. **`com.victronenergy.grid.scheiber_shore`** (Shore Power Transfer &bull; DeviceInstance 41):
+   * `/Connected`: `1` when Shore is applied to either panel with 80–300V line voltage, `0` in standby
+   * `/Ac/L1/Voltage`: Measured Shore AC line voltage
+3. **`com.victronenergy.inverter.ttyS7`** (Phoenix 12V 375VA &bull; Starlink Inverter &bull; DeviceInstance 279):
+   * Dedicated VE.Direct inverter for Starlink connectivity
+
+### 3.2 Scheiber Diagnostics & Power Distribution Paths
+
+Under `com.victronenergy.genset.scheiber` on the Cerbo GX system bus:
 
 | D-Bus Path | Type | Example Values | Purpose |
 |---|---|---|---|
@@ -82,12 +99,22 @@ All AC telemetry is published under `com.victronenergy.genset.scheiber` on the C
 | `/Scheiber/MastervoltInverterStateText` | `string` | `"OFF"`, `"ON"` | MasterVolt 2000W operating text |
 | `/Scheiber/HousePanelVoltage` | `float` | `230.0` V | Measured House AC voltage |
 | `/Scheiber/AcPanelVoltage` | `float` | `230.0` V | Measured A/C AC voltage |
-| `/Scheiber/HousePanelFrequencyStatus` | `float` | `50.0` Hz | Measured House AC frequency |
-| `/Scheiber/AcPanelFrequencyStatus` | `float` | `50.0` Hz | Measured A/C AC frequency |
 
 ---
 
-## 4. Node-RED Real-Time Flow (`AC Power & Inverter Routing`)
+## 4. Venus OS GUI-v2 Live Visualization
+
+In Victron GUI-v2 (`http://venus.local/gui-v2/`), the AC topology is rendered dynamically:
+
+![Venus OS GUI-v2 Live AC Topology](images/gui-v2-overview.png)
+
+* **Shore Power / Generator Tiles**: Displayed in Standby (`-- W`) when disconnected, and automatically switch to active line voltage when applied at the Scheiber panel.
+* **Central Inverter / Charger Node**: Reports system-wide inverting (`230V`) supplied by the House battery bank.
+* **Control Cards**: Tapping Controls/Cards displays `Inverter (MasterVolt 2000W)` and `Inverter (STARLINK INV)` as dedicated standalone tiles.
+
+---
+
+## 5. Node-RED Real-Time Flow (`AC Power & Inverter Routing`)
 
 The flow (`cerbo/node-red-ac-power-flow.json`) monitors all D-Bus paths and maintains a live power routing matrix:
 
