@@ -16,6 +16,9 @@ SWITCH_RTR_ENABLED="${SWITCH_RTR_ENABLED:-1}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 EXPECTED_BRIDGE_SHA256="6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097"
+RC_LOCAL="${RC_LOCAL:-/data/rc.local}"
+MAIN_MARKER="# scheiber-gx persistent runit service"
+SWITCH_MARKER="# scheiber-switch persistent runit service"
 
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: run this installer as root." >&2
@@ -171,7 +174,7 @@ rm -rf "$STAGE"
 rm -f "$APP_DIR/assemble_bridge.py"
 rm -rf "$APP_DIR/source"
 
-# CAN_INTERFACE is now a selector ('auto' is preferred), not necessarily the
+# CAN_INTERFACE is a selector ('auto' is preferred), not necessarily the
 # boot-specific canN name. The resolved name is written to /run at service start.
 printf '%s\n' "$CAN_IF" > "$APP_DIR/CAN_INTERFACE"
 printf '%s\n' "$CAN_BITRATE" > "$APP_DIR/CAN_BITRATE"
@@ -181,35 +184,73 @@ printf '%s\n' "$CAN_USB_PRODUCT_ID" > "$APP_DIR/CAN_USB_PRODUCT_ID"
 printf '%s\n' "$SWITCH_TX_ENABLED" > "$APP_DIR/SWITCH_TX_ENABLED"
 printf '%s\n' "$SWITCH_RTR_ENABLED" > "$APP_DIR/SWITCH_RTR_ENABLED"
 
-RC_LOCAL="/data/rc.local"
-MAIN_MARKER="# scheiber-gx persistent runit service"
-SWITCH_MARKER="# scheiber-switch persistent runit service"
+# Install the persistent service links before the first `exit 0`. Older
+# revisions appended the block after `exit 0`, which made it unreachable.
+# Remove any prior marker blocks wherever they occur, then insert one canonical
+# block immediately before the first exit. Preserve all unrelated rc.local
+# content and append the block if no exit statement exists.
 if [ ! -f "$RC_LOCAL" ]; then
-    printf '%s\n' '#!/bin/sh' > "$RC_LOCAL"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$RC_LOCAL"
 fi
-if ! grep -Fq "$MAIN_MARKER" "$RC_LOCAL"; then
-    cat >> "$RC_LOCAL" <<'RC_MAIN'
-# scheiber-gx persistent runit service
-[ -e /service/scheiber-gx ] || ln -s /data/scheiber-gx/service /service/scheiber-gx
-RC_MAIN
-fi
-if ! grep -Fq "$SWITCH_MARKER" "$RC_LOCAL"; then
-    cat >> "$RC_LOCAL" <<'RC_SWITCH'
-# scheiber-switch persistent runit service
-[ -e /service/scheiber-switch ] || ln -s /data/scheiber-gx/service-switch /service/scheiber-switch
-RC_SWITCH
-fi
+awk \
+    -v main_marker="$MAIN_MARKER" \
+    -v switch_marker="$SWITCH_MARKER" \
+    -v main_cmd='[ -e /service/scheiber-gx ] || ln -s /data/scheiber-gx/service /service/scheiber-gx' \
+    -v switch_cmd='[ -e /service/scheiber-switch ] || ln -s /data/scheiber-gx/service-switch /service/scheiber-switch' '
+    $0 == main_marker || $0 == switch_marker { skip_next=1; next }
+    skip_next { skip_next=0; next }
+    !inserted && $0 ~ /^[[:space:]]*exit[[:space:]]+0[[:space:]]*$/ {
+        print main_marker
+        print main_cmd
+        print switch_marker
+        print switch_cmd
+        inserted=1
+    }
+    { print }
+    END {
+        if (!inserted) {
+            print main_marker
+            print main_cmd
+            print switch_marker
+            print switch_cmd
+        }
+    }
+' "$RC_LOCAL" > "$RC_LOCAL.tmp"
+mv "$RC_LOCAL.tmp" "$RC_LOCAL"
 chmod 755 "$RC_LOCAL"
 
 [ -e "$SERVICE_LINK" ] || ln -s "$APP_DIR/service" "$SERVICE_LINK"
 [ -e "$SWITCH_SERVICE_LINK" ] || ln -s "$APP_DIR/service-switch" "$SWITCH_SERVICE_LINK"
 
-if command -v svc >/dev/null 2>&1; then
-    svc -d "$SWITCH_SERVICE_LINK" 2>/dev/null || true
-    svc -d "$SERVICE_LINK" 2>/dev/null || true
+# Venus OS commonly provides daemontools/runit `svc` rather than the newer
+# `sv` command. Search the usual locations in case it is outside root's PATH.
+SVC="$(command -v svc 2>/dev/null || true)"
+if [ -z "$SVC" ]; then
+    for candidate in /command/svc /usr/bin/svc /bin/svc /sbin/svc; do
+        if [ -x "$candidate" ]; then
+            SVC="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -n "$SVC" ]; then
+    "$SVC" -d "$SWITCH_SERVICE_LINK" 2>/dev/null || true
+    "$SVC" -d "$SERVICE_LINK" 2>/dev/null || true
     sleep 1
-    svc -u "$SERVICE_LINK"
-    svc -u "$SWITCH_SERVICE_LINK"
+    rm -f /run/scheiber-can-if
+    "$SVC" -u "$SERVICE_LINK"
+
+    # The main service owns CAN discovery. Give it a short head start before
+    # enabling the dependent switch process.
+    attempt=0
+    while [ "$attempt" -lt 10 ] && [ ! -s /run/scheiber-can-if ]; do
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    "$SVC" -u "$SWITCH_SERVICE_LINK"
+else
+    echo "WARNING: svc was not found; service links are installed and will start on boot." >&2
 fi
 
 cat <<EOF
@@ -227,13 +268,14 @@ Scheiber GX services installed.
   switch CAN TX:    $SWITCH_TX_ENABLED
   switch RTR sync:  $SWITCH_RTR_ENABLED
   bridge SHA-256:   $actual_bridge_sha
+  rc.local:         $RC_LOCAL (service block before exit 0)
   telemetry log:    $APP_DIR/bridge.log
   switch log:       $APP_DIR/switch.log
   switch status:    $APP_DIR/switch-status.json
 
 Next checks:
   cat /run/scheiber-can-if 2>/dev/null || true
-  sv status $SERVICE_LINK $SWITCH_SERVICE_LINK
+  command -v svc 2>/dev/null || true
   tail -n 100 $APP_DIR/switch.log
   dbus -y com.victronenergy.switch.scheiber /Connected GetValue
   dbus -y com.victronenergy.switch.scheiber /Scheiber/SynchronizedOutputCount GetValue
