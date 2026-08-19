@@ -4,10 +4,11 @@
 Features:
   1. Geofence & Swing Circle Watch (Haversine & Direct Geodesic calculation).
   2. One-tap "Reset to Heading + Distance" projection.
-  3. Continuous Breadcrumb Track Recording while armed.
-  4. Vector Cairo Map Rendering with concentric distance rings, safe circle, and swing history.
-  5. Interactive Telegram Bot with dynamic quick-action buttons & map photo dispatch.
-  6. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
+  3. Continuous Breadcrumb Track & Wind (TWS/TWD) History Recording.
+  4. Real-time NMEA 2000 listener (Wind PGN 130306, Depth PGN 128267, Heading PGN 127250, GPS PGN 129029).
+  5. Vector Cairo Map Rendering with concentric rings, swing trail, and live Wind Rose HUD.
+  6. Interactive Telegram Bot with dynamic quick-action buttons & map photo dispatch.
+  7. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
 """
 
 import os
@@ -17,6 +18,9 @@ import math
 import json
 import uuid
 import io
+import socket
+import struct
+import threading
 import logging
 import urllib.request
 import urllib.parse
@@ -95,12 +99,22 @@ def bearing_to_target(lat1, lon1, lat2, lon2):
     return (bearing + 360.0) % 360.0
 
 
-def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, current_lat, current_lon, current_heading=0.0, current_sog=0.0, current_soc=None):
-    """Render high-resolution dark nautical anchor watch map as PNG."""
+def wind_direction_cardinal(deg):
+    """Convert degrees to cardinal direction string."""
+    if deg is None:
+        return "N/A"
+    cardinals = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                 "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    idx = int((deg + 11.25) / 22.5) % 16
+    return cardinals[idx]
+
+
+def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, current_lat, current_lon, current_heading=0.0, current_sog=0.0, current_soc=None, current_wind_speed=None, current_wind_dir=None, current_depth=None, wind_history=None):
+    """Render high-resolution dark nautical anchor watch map as PNG with Wind Rose."""
     if not HAVE_CAIRO:
         return None
 
-    width, height = 800, 800
+    width, height = 850, 850
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
 
@@ -126,10 +140,10 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         all_y.append(cy)
 
     max_dist = max(alarm_radius_m * 1.35, max(math.hypot(x, y) for x, y in zip(all_x, all_y)) * 1.25, 30.0)
-    scale = (min(width, height) / 2.0 - 45.0) / max_dist
+    scale = (min(width, height) / 2.0 - 55.0) / max_dist
 
     center_x = width / 2.0
-    center_y = height / 2.0
+    center_y = height / 2.0 + 15.0
 
     def to_pixel(east_m, north_m):
         return center_x + east_m * scale, center_y - north_m * scale
@@ -157,10 +171,10 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     # 3. Crosshairs
     ctx.set_source_rgba(0.2, 0.35, 0.5, 0.3)
     ctx.set_line_width(1.0)
-    ctx.move_to(center_x, 20)
-    ctx.line_to(center_x, height - 20)
-    ctx.move_to(20, center_y)
-    ctx.line_to(width - 20, center_y)
+    ctx.move_to(center_x, 30)
+    ctx.line_to(center_x, height - 30)
+    ctx.move_to(30, center_y)
+    ctx.line_to(width - 30, center_y)
     ctx.stroke()
 
     # 4. Safe Alarm Radius (Dashed Green/Cyan Circle)
@@ -262,11 +276,11 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     # 9. Top HUD Overlay Header
     cur_dist = math.hypot(*gps_to_xy(current_lat, current_lon)) if (current_lat and current_lon) else 0.0
     ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
-    ctx.rectangle(15, 15, width - 30, 75)
+    ctx.rectangle(15, 15, width - 30, 80)
     ctx.fill()
     ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
     ctx.set_line_width(1.0)
-    ctx.rectangle(15, 15, width - 30, 75)
+    ctx.rectangle(15, 15, width - 30, 80)
     ctx.stroke()
 
     ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
@@ -277,15 +291,82 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
 
     ctx.set_font_size(13)
     ctx.set_source_rgb(0.8, 0.9, 1.0)
-    ctx.move_to(30, 68)
+    ctx.move_to(30, 66)
     soc_str = f"{current_soc:.0f}%" if current_soc is not None else "N/A"
-    ctx.show_text(f"HDG: {current_heading:.0f}°   SOG: {current_sog:.1f} kn   BATTERY: {soc_str}   PTS: {len(track_points)}")
+    depth_str = f"{current_depth:.1f}m" if current_depth is not None else "N/A"
+    wind_str = f"{current_wind_speed:.1f}kn {wind_direction_cardinal(current_wind_dir)} ({current_wind_dir:.0f}°)" if (current_wind_speed is not None and current_wind_dir is not None) else "N/A"
+    ctx.show_text(f"WIND: {wind_str}   DEPTH: {depth_str}   HDG: {current_heading:.0f}°   BATTERY: {soc_str}")
 
-    # 10. Bottom Timestamp Footer
+    ctx.set_font_size(11)
+    ctx.set_source_rgba(0.5, 0.7, 0.9, 0.8)
+    ctx.move_to(30, 85)
+    ctx.show_text(f"SOG: {current_sog:.1f} kn   TRACK POINTS: {len(track_points)}")
+
+    # 10. Floating Wind Rose in Top Right
+    if current_wind_dir is not None:
+        wr_x = width - 75
+        wr_y = 155
+        wr_rad = 42.0
+
+        ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
+        ctx.arc(wr_x, wr_y, wr_rad + 8, 0, 2 * math.pi)
+        ctx.fill()
+        ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
+        ctx.set_line_width(1.0)
+        ctx.arc(wr_x, wr_y, wr_rad + 8, 0, 2 * math.pi)
+        ctx.stroke()
+
+        # Wind Rose Compass Ring
+        ctx.set_source_rgba(0.3, 0.5, 0.7, 0.4)
+        ctx.arc(wr_x, wr_y, wr_rad, 0, 2 * math.pi)
+        ctx.stroke()
+
+        # Cardinal markers
+        ctx.set_font_size(10)
+        ctx.set_source_rgba(0.6, 0.8, 1.0, 0.9)
+        ctx.move_to(wr_x - 4, wr_y - wr_rad + 11)
+        ctx.show_text("N")
+        ctx.move_to(wr_x + wr_rad - 12, wr_y + 4)
+        ctx.show_text("E")
+        ctx.move_to(wr_x - 4, wr_y + wr_rad - 3)
+        ctx.show_text("S")
+        ctx.move_to(wr_x - wr_rad + 3, wr_y + 4)
+        ctx.show_text("W")
+
+        # Wind Direction Arrow (Pointing in direction wind is blowing TO)
+        w_rad = math.radians(current_wind_dir)
+        w_tip_x = wr_x + (wr_rad - 12) * math.sin(w_rad)
+        w_tip_y = wr_y - (wr_rad - 12) * math.cos(w_rad)
+        w_base_x = wr_x - (wr_rad - 18) * math.sin(w_rad)
+        w_base_y = wr_y + (wr_rad - 18) * math.cos(w_rad)
+
+        ctx.set_source_rgba(0.0, 0.9, 1.0, 0.9)
+        ctx.set_line_width(3.0)
+        ctx.move_to(w_base_x, w_base_y)
+        ctx.line_to(w_tip_x, w_tip_y)
+        ctx.stroke()
+
+        # Arrow head
+        arr_size = 8.0
+        ctx.set_source_rgba(0.0, 0.9, 1.0, 0.9)
+        ctx.move_to(w_tip_x, w_tip_y)
+        ctx.line_to(w_tip_x - arr_size * math.sin(w_rad - 0.5), w_tip_y + arr_size * math.cos(w_rad - 0.5))
+        ctx.line_to(w_tip_x - arr_size * math.sin(w_rad + 0.5), w_tip_y + arr_size * math.cos(w_rad + 0.5))
+        ctx.close_path()
+        ctx.fill()
+
+        # Wind Speed in center of rose
+        ctx.set_font_size(10)
+        ctx.set_source_rgb(1.0, 1.0, 1.0)
+        ws_label = f"{current_wind_speed:.0f}k" if current_wind_speed is not None else ""
+        ctx.move_to(wr_x - 8, wr_y + 4)
+        ctx.show_text(ws_label)
+
+    # 11. Bottom Timestamp Footer
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     ctx.set_font_size(11)
     ctx.set_source_rgba(0.5, 0.6, 0.7, 0.8)
-    ctx.move_to(25, height - 20)
+    ctx.move_to(25, height - 18)
     ctx.show_text(f"Cerbo GX Smart Anchor Watch • {now_str} • Lat: {current_lat or 0:.5f}°, Lon: {current_lon or 0:.5f}°")
 
     buf = io.BytesIO()
@@ -388,8 +469,9 @@ class TelegramClient:
 
 
 class AnchorWatchService:
-    def __init__(self, config_path=CONFIG_FILE):
+    def __init__(self, config_path=CONFIG_FILE, can_interface="can1"):
         self.config_path = config_path
+        self.can_interface = can_interface
         self.config = self.load_config()
         self.tg = TelegramClient(
             self.config.get("telegram_bot_token", ""),
@@ -406,8 +488,9 @@ class AnchorWatchService:
         self.last_alarm_time = -1000.0
         self.silenced_until = 0.0
         
-        # Track History Buffer
+        # History Buffers
         self.track_points = []
+        self.wind_history = []
         self.last_track_record_time = 0.0
 
         # Sensor readings
@@ -423,6 +506,10 @@ class AnchorWatchService:
         # D-Bus
         self.bus = None
         self.init_dbus()
+
+        # N2K Listener Thread
+        self.can_thread_running = False
+        self.start_n2k_listener()
 
     def load_config(self):
         cfg = dict(DEFAULT_CONFIG)
@@ -442,6 +529,62 @@ class AnchorWatchService:
             log.info("Connected to D-Bus SystemBus.")
         except Exception as e:
             log.warning(f"D-Bus initialization deferred: {e}")
+
+    def start_n2k_listener(self):
+        self.can_thread_running = True
+        t = threading.Thread(target=self._n2k_reader_loop, daemon=True)
+        t.start()
+
+    def _n2k_reader_loop(self):
+        try:
+            s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+            s.bind((self.can_interface,))
+            s.settimeout(2.0)
+            log.info(f"N2K CAN listener active on {self.can_interface}")
+        except Exception as e:
+            log.warning(f"Could not bind to {self.can_interface}: {e}")
+            return
+
+        while self.can_thread_running:
+            try:
+                cf, addr = s.recvfrom(16)
+                can_id, can_dlc, data = struct.unpack('<IB3x8s', cf)
+                can_id &= 0x1FFFFFFF
+                pgn = (can_id >> 8) & 0x1FFFF
+                if (pgn & 0xFF00) < 0xF000:
+                    pgn = pgn & 0x1FF00
+
+                # 1. PGN 130306: Wind Data
+                if pgn == 130306:
+                    speed_raw = struct.unpack('<H', data[1:3])[0]
+                    angle_raw = struct.unpack('<H', data[3:5])[0]
+                    ref = data[5] & 0x07
+                    if speed_raw != 0xFFFF:
+                        self.current_wind_speed = (speed_raw * 0.01) * 1.94384
+                    if angle_raw != 0xFFFF:
+                        angle_deg = math.degrees(angle_raw * 0.0001)
+                        if ref == 0:  # True North (TWD)
+                            self.current_wind_dir = angle_deg
+                        elif ref in (2, 3):  # Apparent or True Boat relative
+                            self.current_wind_dir = (self.current_heading + angle_deg) % 360.0
+
+                # 2. PGN 128267: Water Depth
+                elif pgn == 128267:
+                    depth_raw = struct.unpack('<I', data[1:5])[0]
+                    if depth_raw != 0xFFFFFFFF:
+                        self.current_depth = depth_raw * 0.01
+
+                # 3. PGN 127250: Vessel Heading
+                elif pgn == 127250:
+                    hdg_raw = struct.unpack('<H', data[1:3])[0]
+                    if hdg_raw != 0xFFFF:
+                        self.current_heading = math.degrees(hdg_raw * 0.0001)
+
+            except socket.timeout:
+                pass
+            except Exception as e:
+                log.debug(f"N2K reader exception: {e}")
+                time.sleep(0.5)
 
     def poll_sensors(self):
         if not self.bus:
@@ -466,7 +609,7 @@ class AnchorWatchService:
                             best_sats = sats
                             if "Speed" in val and val["Speed"] is not None:
                                 self.current_sog = float(val["Speed"]) * 1.94384
-                            if "Course" in val and val["Course"] is not None:
+                            if "Course" in val and val["Course"] is not None and self.current_heading == 0.0:
                                 self.current_heading = float(val["Course"])
                 except Exception as e:
                     log.debug(f"Error polling GPS service {s}: {e}")
@@ -494,6 +637,7 @@ class AnchorWatchService:
         self.set_time = datetime.now(timezone.utc)
         self.silenced_until = 0.0
         self.track_points = []
+        self.wind_history = []
         if self.current_lat and self.current_lon:
             self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
         log.info(f"Anchor Armed: Point ({self.anchor_lat:.5f}, {self.anchor_lon:.5f}), Rode: {self.rode_m}m, Radius: {self.alarm_radius_m}m")
@@ -520,7 +664,7 @@ class AnchorWatchService:
 
         now = time.monotonic()
 
-        # Record breadcrumb every 10s if moved > 1.5m
+        # Record breadcrumbs & wind sample every 10s
         if now - self.last_track_record_time >= 10.0:
             record = True
             if self.track_points:
@@ -530,8 +674,12 @@ class AnchorWatchService:
                     record = False
             if record:
                 self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
+                if self.current_wind_speed is not None and self.current_wind_dir is not None:
+                    self.wind_history.append({"tws": self.current_wind_speed, "twd": self.current_wind_dir, "time": time.time()})
                 if len(self.track_points) > 1500:
                     self.track_points.pop(0)
+                if len(self.wind_history) > 1500:
+                    self.wind_history.pop(0)
                 self.last_track_record_time = now
 
         dist_m = haversine_distance_m(self.current_lat, self.current_lon, self.anchor_lat, self.anchor_lon)
@@ -549,10 +697,13 @@ class AnchorWatchService:
             self.set_scheiber_switch(self.config.get("cockpit_light_channel", 4), 1)
 
         map_url = f"https://maps.google.com/?q={self.current_lat:.5f},{self.current_lon:.5f}"
+        wind_cardinal = wind_direction_cardinal(self.current_wind_dir)
         msg = (
             f"🚨 <b>ANCHOR DRAG ALARM!</b>\n\n"
             f"⚠️ <b>Distance:</b> {dist_m:.1f} m (Limit: {self.alarm_radius_m:.1f} m)\n"
-            f"⚡ <b>SOG:</b> {self.current_sog:.1f} kn | <b>Heading:</b> {self.current_heading:.0f}°\n"
+            f"💨 <b>Wind:</b> {self.current_wind_speed or 0:.1f} kn {wind_cardinal} ({self.current_wind_dir or 0:.0f}°)\n"
+            f"🌊 <b>Depth:</b> {self.current_depth or 0:.1f} m\n"
+            f"⚡ <b>SOG / Heading:</b> {self.current_sog:.1f} kn / {self.current_heading:.0f}°\n"
             f"📍 <b>Position:</b> {self.current_lat:.5f}°, {self.current_lon:.5f}°\n"
             f"🔋 <b>SoC:</b> {self.current_soc or 0:.0f}%\n\n"
             f"<a href='{map_url}'>🗺️ View Vessel on Live Map</a>"
@@ -570,7 +721,6 @@ class AnchorWatchService:
             ]
         }
 
-        # Attempt to render and send map photo with alarm
         png = self.render_map()
         if png:
             self.tg.send_photo(png, caption=msg, reply_markup=markup)
@@ -599,7 +749,11 @@ class AnchorWatchService:
             self.current_lon,
             current_heading=self.current_heading,
             current_sog=self.current_sog,
-            current_soc=self.current_soc
+            current_soc=self.current_soc,
+            current_wind_speed=self.current_wind_speed,
+            current_wind_dir=self.current_wind_dir,
+            current_depth=self.current_depth,
+            wind_history=self.wind_history
         )
 
     def build_quick_menu(self):
@@ -640,13 +794,17 @@ class AnchorWatchService:
         else:
             status_line = "⚪ <b>DISARMED</b>"
 
+        wind_str = f"{self.current_wind_speed:.1f} kn {wind_direction_cardinal(self.current_wind_dir)} ({self.current_wind_dir:.0f}°)" if (self.current_wind_speed is not None and self.current_wind_dir is not None) else "N/A"
+        depth_str = f"{self.current_depth:.1f} m" if self.current_depth is not None else "N/A"
+
         msg = (
             f"⚓ <b>Anchor Watch Status</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"• <b>Status:</b> {status_line}\n"
             f"• <b>Rode Length:</b> {self.rode_m:.0f} m\n"
             f"• <b>Alarm Radius:</b> {self.alarm_radius_m:.0f} m\n"
-            f"• <b>Track Points:</b> {len(self.track_points)}\n"
+            f"• <b>True Wind:</b> {wind_str}\n"
+            f"• <b>Water Depth:</b> {depth_str}\n"
             f"• <b>Boat Position:</b> {self.current_lat or 0:.5f}°, {self.current_lon or 0:.5f}°\n"
             f"• <b>SOG / Heading:</b> {self.current_sog:.1f} kn / {self.current_heading:.0f}°\n"
             f"• <b>House Battery:</b> {self.current_soc or 0:.0f}% SoC\n\n"
