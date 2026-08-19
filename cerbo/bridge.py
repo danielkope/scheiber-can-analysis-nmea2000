@@ -86,7 +86,7 @@ SERVICE_NAME = "com.victronenergy.genset.scheiber"
 DEVICE_INSTANCE = 40
 PRODUCT_ID = 0xFFFF
 PRODUCT_NAME = "Scheiber Generator"
-BRIDGE_VERSION = "5.7.0"
+BRIDGE_VERSION = "5.8.0"
 
 LOGFILE = "/data/scheiber-gx/bridge.log"
 STATUSFILE = "/data/scheiber-gx/status.json"
@@ -412,6 +412,10 @@ class Bridge:
         self.shore_service = None
         self.shore_bus = None
 
+        # Native Victron Inverter service for MasterVolt 2000W.
+        self.mastervolt_service = None
+        self.mastervolt_bus = None
+
         # Transition tracking.  Diagnostic only: timeouts never retry commands.
         self.running_candidate_since = None
         self.pending = None
@@ -434,6 +438,7 @@ class Bridge:
 
         self.setup_dbus()
         self.setup_grid_service()
+        self.setup_mastervolt_inverter_service()
         self.setup_battery_services()
         self.setup_tank_services()
         self.setup_name_owner_watch()
@@ -713,6 +718,65 @@ class Bridge:
         svc.add_path("/Ac/L1/Energy/Reverse", None)
         svc.register()
         self.shore_service = svc
+        self.log("Registered {}".format(service_name))
+
+    def setup_mastervolt_inverter_service(self):
+        """Create native Victron inverter telemetry service for MasterVolt 2000W."""
+        service_name = "com.victronenergy.inverter.scheiber_mastervolt"
+        self.mastervolt_bus = dbus.Bus.get_system(private=True)
+        svc = VeDbusService(
+            service_name,
+            bus=self.mastervolt_bus,
+            register=False,
+        )
+        svc.add_mandatory_paths(
+            processname=os.path.abspath(__file__),
+            processversion=BRIDGE_VERSION,
+            connection="Scheiber CAN on {}".format(CAN_IF),
+            deviceinstance=280,
+            productid=PRODUCT_ID,
+            productname="MasterVolt 2000W Inverter",
+            firmwareversion=BRIDGE_VERSION,
+            hardwareversion=None,
+            connected=1,
+        )
+        svc.add_path("/CustomName", "MasterVolt 2000W (House)")
+        svc.add_path("/State", 0)
+        svc.add_path("/Mode", 4)
+        svc.add_path(
+            "/Ac/Out/L1/V",
+            None,
+            gettextcallback=lambda p, v: (
+                "---" if v is None else "{:.1f} V".format(float(v))
+            ),
+        )
+        svc.add_path(
+            "/Ac/Out/L1/P",
+            None,
+            gettextcallback=lambda p, v: (
+                "---" if v is None else "{:.0f} W".format(float(v))
+            ),
+        )
+        svc.add_path(
+            "/Ac/Out/L1/I",
+            None,
+            gettextcallback=lambda p, v: (
+                "---" if v is None else "{:.1f} A".format(float(v))
+            ),
+        )
+        svc.add_path(
+            "/Dc/0/Voltage",
+            None,
+            gettextcallback=lambda p, v: (
+                "---" if v is None else "{:.2f} V".format(float(v))
+            ),
+        )
+        svc.add_path("/Alarms/LowVoltage", 0)
+        svc.add_path("/Alarms/HighVoltage", 0)
+        svc.add_path("/Alarms/Overload", 0)
+        svc.add_path("/Alarms/HighTemperature", 0)
+        svc.register()
+        self.mastervolt_service = svc
         self.log("Registered {}".format(service_name))
 
     def setup_battery_services(self):
@@ -1146,6 +1210,24 @@ class Bridge:
             self.shore_service["/Ac/L1/Voltage"] = None
             self.shore_service["/Ac/L1/Power"] = None
             self.shore_service["/Ac/L1/Current"] = None
+
+    def update_mastervolt_inverter_publication(self):
+        """Update native MasterVolt 2000W inverter telemetry service."""
+        if not self.mastervolt_service:
+            return
+
+        is_on = self.mastervolt_inverter_state == 1
+        self.mastervolt_service["/State"] = 9 if is_on else 0
+        self.mastervolt_service["/Mode"] = 2 if is_on else 4
+
+        if is_on and self.last_house_panel_voltage is not None:
+            self.mastervolt_service["/Ac/Out/L1/V"] = float(self.last_house_panel_voltage)
+        else:
+            self.mastervolt_service["/Ac/Out/L1/V"] = None
+
+        house_bat = self.battery_services.get("house_combined")
+        if house_bat and house_bat["/Dc/0/Voltage"] is not None:
+            self.mastervolt_service["/Dc/0/Voltage"] = house_bat["/Dc/0/Voltage"]
 
 
     # ------------------------------------------------------------------
@@ -2141,6 +2223,7 @@ class Bridge:
                 self.log("RX AC ramp transition marker: 0x{:02X}".format(marker))
 
             self.update_ac_sources()
+            self.update_mastervolt_inverter_publication()
             self.write_status()
             return
 
@@ -2171,6 +2254,7 @@ class Bridge:
 
             self.update_genset_ac_voltage_publication()
             self.update_shore_power_publication()
+            self.update_mastervolt_inverter_publication()
             return
 
         # --------------------------------------------------------------
@@ -2524,6 +2608,7 @@ class Bridge:
         # Re-evaluate preferred/fallback generator AC voltage freshness.
         self.update_genset_ac_voltage_publication()
         self.update_shore_power_publication()
+        self.update_mastervolt_inverter_publication()
 
         # Keep status.json useful without writing it for every battery frame.
         if now - self.last_status_snapshot >= STATUS_SNAPSHOT_INTERVAL:
