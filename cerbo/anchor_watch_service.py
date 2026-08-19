@@ -6,7 +6,7 @@ Features:
   2. One-tap "Reset to Heading + Distance" projection.
   3. Continuous Breadcrumb Track & Wind (TWS/TWD) History Recording.
   4. Real-time NMEA 2000 listener (Wind PGN 130306, Depth PGN 128267, Heading PGN 127250, GPS PGN 129029).
-  5. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD time-series plot.
+  5. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD multi-hour time-series plot.
   6. Interactive Telegram Bot with dynamic quick-action buttons & map photo dispatch.
   7. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
 """
@@ -48,8 +48,8 @@ DEFAULT_CONFIG = {
     "wind_squall_gust_kn": 25.0,
     "wind_shift_threshold_deg": 60.0,
     "turn_on_deck_lights_on_alarm": True,
-    "deck_light_channel": 3,   # Scheiber output 3 = Deck Floodlights
-    "cockpit_light_channel": 4 # Scheiber output 4 = Cockpit Lights
+    "deck_light_channel": "deck_floodlight",  # Scheiber SwitchableOutput ID
+    "cockpit_light_channel": "lighting"       # Scheiber SwitchableOutput ID
 }
 
 EARTH_RADIUS_M = 6371000.0
@@ -117,21 +117,21 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     if not HAVE_CAIRO:
         return None
 
-    width, height = 900, 980
+    width, height = 900, 1020
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
 
-    # 1. Background
+    # 1. Main Background
     ctx.set_source_rgb(0.04, 0.07, 0.12)
     ctx.paint()
 
     map_top = 105
-    map_height = 570
+    map_height = 560
     map_center_x = width / 2.0
     map_center_y = map_top + map_height / 2.0
 
-    chart_top = 700
-    chart_height = 230
+    chart_top = 690
+    chart_height = 270
     chart_left = 65
     chart_right = width - 65
     chart_width = chart_right - chart_left
@@ -184,8 +184,8 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.move_to(30, 66)
     soc_str = f"{current_soc:.0f}%" if current_soc is not None else "N/A"
     depth_str = f"{current_depth:.1f}m" if current_depth is not None else "N/A"
-    cardinal = wind_direction_cardinal(current_wind_dir)
-    wind_str = f"{current_wind_speed:.1f}kn {cardinal} ({current_wind_dir:.0f}°)" if (current_wind_speed is not None and current_wind_dir is not None) else "N/A"
+    card = wind_direction_cardinal(current_wind_dir)
+    wind_str = f"{current_wind_speed:.1f}kn {card} ({current_wind_dir:.0f}°)" if (current_wind_speed is not None and current_wind_dir is not None) else "N/A"
     ctx.show_text(f"WIND: {wind_str}   DEPTH: {depth_str}   HDG: {current_heading:.0f}°   BATTERY: {soc_str}")
 
     ctx.set_font_size(11)
@@ -194,7 +194,6 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.show_text(f"SOG: {current_sog:.1f} kn   TRACK PTS: {len(track_points or [])}   WIND SAMPLES: {len(wind_history or [])}")
 
     # 3. ANCHOR MAP VIEWPORT
-    # Concentric Distance Rings
     ring_interval = 10.0 if max_dist <= 60 else (20.0 if max_dist <= 150 else 50.0)
     r = ring_interval
     while r <= max_dist:
@@ -219,7 +218,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.line_to(width - 30, map_center_y)
     ctx.stroke()
 
-    # Safe Alarm Radius (Dashed Green/Cyan Circle)
+    # Safe Alarm Radius
     alarm_px = alarm_radius_m * scale
     ctx.set_source_rgba(0.1, 0.8, 0.4, 0.08)
     ctx.arc(map_center_x, map_center_y, alarm_px, 0, 2 * math.pi)
@@ -232,7 +231,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.stroke()
     ctx.set_dash([])
 
-    # Breadcrumb Track History
+    # Track History
     if track_points and len(track_points) > 1:
         ctx.set_line_width(2.5)
         for i in range(len(track_points) - 1):
@@ -264,7 +263,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.stroke()
         ctx.set_dash([])
 
-    # Anchor Marker at Center
+    # Anchor Marker
     ctx.set_source_rgb(1.0, 0.3, 0.2)
     ctx.arc(map_center_x, map_center_y, 7.0, 0, 2 * math.pi)
     ctx.fill()
@@ -279,7 +278,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.move_to(map_center_x + 10, map_center_y + 16)
     ctx.show_text("⚓ ANCHOR")
 
-    # Current Vessel Position & Hull
+    # Boat Hull
     if current_lat and current_lon:
         cx, cy = to_pixel(*gps_to_xy(current_lat, current_lon))
         hdg_rad = math.radians(current_heading)
@@ -312,7 +311,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.arc(cx, cy, 3.0, 0, 2 * math.pi)
         ctx.fill()
 
-    # North-Up Compass Indicator (Top Left)
+    # North-Up Compass Indicator
     nu_x = 55
     nu_y = map_top + 45
     ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
@@ -347,7 +346,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.move_to(nu_x - 22, nu_y + 30)
     ctx.show_text("NORTH UP")
 
-    # Floating Wind Rose in Top Right
+    # Floating Wind Rose
     if current_wind_dir is not None:
         wr_x = width - 85
         wr_y = map_top + 45
@@ -417,38 +416,53 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.set_font_size(9)
         ctx.set_source_rgb(1.0, 1.0, 1.0)
         spd_str = f"{current_wind_speed:.0f}kn" if current_wind_speed is not None else ""
-        txt = f"FROM {cardinal} ({spd_str})"
+        txt = f"FROM {card} ({spd_str})"
         ctx.move_to(wr_x - 30, wr_y + 32)
         ctx.show_text(txt)
 
     # 4. SYNCHRONIZED TWS & TWD TIME-SERIES PLOT
     ctx.set_source_rgba(0.02, 0.05, 0.09, 0.9)
-    ctx.rectangle(15, chart_top - 20, width - 30, chart_height + 40)
+    ctx.rectangle(15, chart_top - 15, width - 30, chart_height)
     ctx.fill()
     ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
     ctx.set_line_width(1.0)
-    ctx.rectangle(15, chart_top - 20, width - 30, chart_height + 40)
+    ctx.rectangle(15, chart_top - 15, width - 30, chart_height)
     ctx.stroke()
 
+    # Chart Header & Legend
     ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
     ctx.set_font_size(12)
     ctx.set_source_rgb(0.0, 0.9, 1.0)
-    ctx.move_to(chart_left, chart_top - 5)
+    ctx.move_to(chart_left, chart_top + 5)
     ctx.show_text("— TRUE WIND SPEED (TWS kn)")
     
     ctx.set_source_rgb(1.0, 0.75, 0.2)
-    ctx.move_to(chart_left + 220, chart_top - 5)
+    ctx.move_to(chart_left + 225, chart_top + 5)
     ctx.show_text("--- TRUE WIND DIRECTION (TWD °)")
 
-    plot_y = chart_top + 15
-    plot_h = chart_height - 35
+    # Compute stats if data exists
+    if wind_history and len(wind_history) > 1:
+        speeds = [pt.get("tws", 0.0) for pt in wind_history]
+        max_speed = max(speeds)
+        avg_speed = sum(speeds) / len(speeds)
+        t_span_hours = (wind_history[-1]["time"] - wind_history[0]["time"]) / 3600.0
+        
+        ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        ctx.set_font_size(11)
+        ctx.set_source_rgba(0.7, 0.85, 1.0, 0.9)
+        stats_txt = f"GUST: {max_speed:.1f} kn  |  AVG: {avg_speed:.1f} kn  |  SPAN: {t_span_hours:.1f}h"
+        ctx.move_to(chart_right - 260, chart_top + 5)
+        ctx.show_text(stats_txt)
+
+    plot_y = chart_top + 22
+    plot_h = chart_height - 65
     plot_bottom = plot_y + plot_h
 
     max_tws = 20.0
     if wind_history:
         max_tws = max(max_tws, max(pt.get("tws", 0.0) for pt in wind_history) * 1.25)
 
-    # Horizontal grid lines
+    # Horizontal Grid Lines & Y-Axis Labels
     ctx.set_line_width(0.75)
     for i in range(5):
         ratio = i / 4.0
@@ -470,15 +484,76 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.move_to(chart_right + 8, gy + 4)
         ctx.show_text(f"{card_label} ({deg_val:.0f}°)")
 
+    # Data Rendering & Dynamic Time Axis
     if wind_history and len(wind_history) > 1:
         t_min = wind_history[0]["time"]
         t_max = wind_history[-1]["time"]
         t_span = max(t_max - t_min, 60.0)
 
+        # Determine adaptive time step
+        if t_span <= 900: # <= 15m
+            step = 180 # 3m
+        elif t_span <= 3600: # <= 1h
+            step = 600 # 10m
+        elif t_span <= 3 * 3600: # <= 3h
+            step = 1800 # 30m
+        elif t_span <= 8 * 3600: # <= 8h
+            step = 3600 # 1h
+        elif t_span <= 16 * 3600: # <= 16h
+            step = 7200 # 2h
+        elif t_span <= 24 * 3600: # <= 24h
+            step = 14400 # 4h
+        else:
+            step = 21600 # 6h
+
+        # Vertical Time Grid Lines & Time Axis Ticks
+        first_tick = math.ceil(t_min / step) * step
+        cur_t = first_tick
+        while cur_t <= t_max:
+            tx = chart_left + ((cur_t - t_min) / t_span) * chart_width
+            if chart_left + 15 <= tx <= chart_right - 15:
+                # Vertical grid line
+                ctx.set_source_rgba(0.2, 0.35, 0.5, 0.25)
+                ctx.set_line_width(0.75)
+                ctx.move_to(tx, plot_y)
+                ctx.line_to(tx, plot_bottom)
+                ctx.stroke()
+
+                # Bottom tick
+                ctx.set_source_rgba(0.5, 0.7, 0.9, 0.7)
+                ctx.move_to(tx, plot_bottom)
+                ctx.line_to(tx, plot_bottom + 4)
+                ctx.stroke()
+
+                # Time Label (Clock time + Relative)
+                time_str = datetime.fromtimestamp(cur_t, timezone.utc).strftime("%H:%M")
+                diff_m = int((t_max - cur_t) / 60)
+                rel_str = "NOW" if diff_m < 2 else (f"-{diff_m//60}h" if diff_m % 60 == 0 else f"-{diff_m}m")
+                
+                ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+                ctx.set_font_size(9)
+                ctx.set_source_rgba(0.6, 0.8, 1.0, 0.85)
+                ctx.move_to(tx - 14, plot_bottom + 16)
+                ctx.show_text(time_str)
+
+                ctx.set_font_size(8)
+                ctx.set_source_rgba(0.4, 0.6, 0.8, 0.7)
+                ctx.move_to(tx - 10, plot_bottom + 27)
+                ctx.show_text(rel_str)
+
+            cur_t += step
+
+        # Baseline axis line
+        ctx.set_source_rgba(0.3, 0.5, 0.7, 0.6)
+        ctx.set_line_width(1.0)
+        ctx.move_to(chart_left, plot_bottom)
+        ctx.line_to(chart_right, plot_bottom)
+        ctx.stroke()
+
         # 1. Fill Area for TWS
-        ctx.set_source_rgba(0.0, 0.8, 1.0, 0.15)
         first_x = chart_left + ((wind_history[0]["time"] - t_min) / t_span) * chart_width
         first_y = plot_bottom - (min(wind_history[0]["tws"], max_tws) / max_tws) * plot_h
+        ctx.set_source_rgba(0.0, 0.8, 1.0, 0.15)
         ctx.move_to(first_x, plot_bottom)
         ctx.line_to(first_x, first_y)
         for pt in wind_history[1:]:
@@ -489,7 +564,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.close_path()
         ctx.fill()
 
-        # 2. Line for TWS
+        # 2. Solid Line for TWS
         ctx.set_source_rgba(0.0, 0.95, 1.0, 0.95)
         ctx.set_line_width(2.0)
         ctx.move_to(first_x, first_y)
@@ -499,7 +574,7 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
             ctx.line_to(px, py)
         ctx.stroke()
 
-        # 3. Line for TWD (Dashed Amber with wraparound protection)
+        # 3. Dashed Amber Line for TWD (with wraparound protection)
         ctx.set_source_rgba(1.0, 0.75, 0.2, 0.85)
         ctx.set_line_width(1.5)
         ctx.set_dash([4.0, 3.0])
@@ -658,7 +733,7 @@ class AnchorWatchService:
         self.last_alarm_time = -1000.0
         self.silenced_until = 0.0
         
-        # History Buffers
+        # History Buffers (up to 3000 points = ~8-24h)
         self.track_points = []
         self.wind_history = []
         self.last_track_record_time = 0.0
@@ -848,9 +923,9 @@ class AnchorWatchService:
                 self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
                 if self.current_wind_speed is not None and self.current_wind_dir is not None:
                     self.wind_history.append({"tws": self.current_wind_speed, "twd": self.current_wind_dir, "time": time.time()})
-                if len(self.track_points) > 1500:
+                if len(self.track_points) > 3000:
                     self.track_points.pop(0)
-                if len(self.wind_history) > 1500:
+                if len(self.wind_history) > 3000:
                     self.wind_history.pop(0)
                 self.last_track_record_time = now
 
@@ -865,15 +940,15 @@ class AnchorWatchService:
         log.warning(f"🚨 ANCHOR DRAG DETECTED: Distance {dist_m:.1f}m exceeds limit {self.alarm_radius_m:.1f}m!")
         
         if self.config.get("turn_on_deck_lights_on_alarm"):
-            self.set_scheiber_switch(self.config.get("deck_light_channel", 3), 1)
-            self.set_scheiber_switch(self.config.get("cockpit_light_channel", 4), 1)
+            self.set_scheiber_switch(self.config.get("deck_light_channel", "deck_floodlight"), 1)
+            self.set_scheiber_switch(self.config.get("cockpit_light_channel", "lighting"), 1)
 
         map_url = f"https://maps.google.com/?q={self.current_lat:.5f},{self.current_lon:.5f}"
-        wind_cardinal = wind_direction_cardinal(self.current_wind_dir)
+        card = wind_direction_cardinal(self.current_wind_dir)
         msg = (
             f"🚨 <b>ANCHOR DRAG ALARM!</b>\n\n"
             f"⚠️ <b>Distance:</b> {dist_m:.1f} m (Limit: {self.alarm_radius_m:.1f} m)\n"
-            f"💨 <b>Wind:</b> {self.current_wind_speed or 0:.1f} kn {wind_cardinal} ({self.current_wind_dir or 0:.0f}°)\n"
+            f"💨 <b>Wind:</b> {self.current_wind_speed or 0:.1f} kn {card} ({self.current_wind_dir or 0:.0f}°)\n"
             f"🌊 <b>Depth:</b> {self.current_depth or 0:.1f} m\n"
             f"⚡ <b>SOG / Heading:</b> {self.current_sog:.1f} kn / {self.current_heading:.0f}°\n"
             f"📍 <b>Position:</b> {self.current_lat:.5f}°, {self.current_lon:.5f}°\n"
@@ -998,7 +1073,8 @@ class AnchorWatchService:
         else:
             status_line = "⚪ <b>DISARMED</b>"
 
-        wind_str = f"{self.current_wind_speed:.1f} kn {wind_direction_cardinal(self.current_wind_dir)} ({self.current_wind_dir:.0f}°)" if (self.current_wind_speed is not None and self.current_wind_dir is not None) else "N/A"
+        card = wind_direction_cardinal(self.current_wind_dir)
+        wind_str = f"{self.current_wind_speed:.1f} kn {card} ({self.current_wind_dir:.0f}°)" if (self.current_wind_speed is not None and self.current_wind_dir is not None) else "N/A"
         depth_str = f"{self.current_depth:.1f} m" if self.current_depth is not None else "N/A"
 
         msg = (
