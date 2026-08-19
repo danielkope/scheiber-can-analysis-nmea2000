@@ -6,9 +6,11 @@ Features:
   2. One-tap "Reset to Heading + Distance" projection.
   3. Continuous Breadcrumb Track & Wind (TWS/TWD) History Recording.
   4. Real-time NMEA 2000 listener (Wind PGN 130306, Depth PGN 128267, Heading PGN 127250, GPS PGN 129029).
-  5. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD multi-hour time-series plot.
-  6. Interactive Telegram Bot with dynamic quick-action buttons & map photo dispatch.
-  7. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
+  5. Multi-Sensor Alarms: Anchor Drag, Squall / High Wind, Wind Shift, Shallow Water, and Low Battery.
+  6. High-Volume Synthesized Marine Audio Sirens & Klaxons via Telegram sendAudio.
+  7. Interactive Telegram Bot with real-time settings menu, per-alarm toggles, threshold adjustments, and baseline TWD reset.
+  8. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD multi-hour time-series plot.
+  9. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
 """
 
 import os
@@ -18,8 +20,9 @@ import math
 import json
 import uuid
 import io
-import socket
+import wave
 import struct
+import socket
 import threading
 import logging
 import urllib.request
@@ -44,9 +47,19 @@ DEFAULT_CONFIG = {
     "telegram_chat_id": "",
     "default_rode_m": 50.0,
     "default_safety_margin_m": 10.0,
+    # Alarm Enable/Disable Toggles
+    "alarm_drag_enabled": True,
+    "alarm_squall_enabled": True,
+    "alarm_wind_shift_enabled": True,
+    "alarm_depth_enabled": True,
+    "alarm_battery_enabled": True,
+    "sound_alerts_enabled": True,
+    # Alarm Thresholds
     "depth_alarm_threshold_m": 2.5,
     "wind_squall_gust_kn": 25.0,
     "wind_shift_threshold_deg": 60.0,
+    "battery_low_soc_pct": 20.0,
+    # Scheiber Lighting Integration
     "turn_on_deck_lights_on_alarm": True,
     "deck_light_channel": "deck_floodlight",  # Scheiber SwitchableOutput ID
     "cockpit_light_channel": "lighting"       # Scheiber SwitchableOutput ID
@@ -107,6 +120,61 @@ def wind_direction_cardinal(deg):
                  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
     idx = int((deg + 11.25) / 22.5) % 16
     return cardinals[idx]
+
+
+def generate_alarm_audio(sound_type="drag", duration_s=3.5, sample_rate=22050):
+    """Generate high-volume synthesized marine alarm audio in WAV format."""
+    num_samples = int(duration_s * sample_rate)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)  # Mono
+        wav.setsampwidth(2)  # 16-bit
+        wav.setframerate(sample_rate)
+        frames = bytearray()
+
+        for i in range(num_samples):
+            t = i / sample_rate
+
+            if sound_type == "drag":
+                # Urgent Two-Tone Nautical Siren (880Hz <-> 659Hz every 0.25s) with rich harmonics
+                f = 880.0 if (int(t * 4) % 2 == 0) else 659.0
+                sample = (0.65 * math.sin(2 * math.pi * f * t) +
+                          0.25 * math.sin(2 * math.pi * 3 * f * t) +
+                          0.10 * math.sin(2 * math.pi * 5 * f * t))
+
+            elif sound_type == "squall":
+                # Pulsing High-Wind Klaxon (3 rapid bursts per sec at 550Hz + 1100Hz)
+                cycle_t = t % 0.33
+                if cycle_t < 0.20:
+                    sample = 0.70 * math.sin(2 * math.pi * 550.0 * t) + 0.30 * math.sin(2 * math.pi * 1100.0 * t)
+                else:
+                    sample = 0.0
+
+            elif sound_type == "depth":
+                # Rapid Descending Sonar Ping (1400Hz -> 500Hz per 0.4s)
+                cycle_t = t % 0.40
+                if cycle_t < 0.25:
+                    sweep_f = 1400.0 - (cycle_t / 0.25) * 900.0
+                    decay = math.exp(-cycle_t * 6.0)
+                    sample = decay * (0.80 * math.sin(2 * math.pi * sweep_f * t) + 0.20 * math.sin(2 * math.pi * 2 * sweep_f * t))
+                else:
+                    sample = 0.0
+
+            elif sound_type == "wind_shift":
+                # Double Nautical Bell Chime (784Hz + 1046Hz decaying chime)
+                cycle_t = t % 1.0
+                decay = math.exp(-cycle_t * 4.0)
+                sample = decay * (0.50 * math.sin(2 * math.pi * 784.0 * t) + 0.50 * math.sin(2 * math.pi * 1046.0 * t))
+
+            else:
+                sample = 0.70 * math.sin(2 * math.pi * 440.0 * t)
+
+            # Max amplitude scaling with saturation limit
+            val = int(max(-32767, min(32767, sample * 32760)))
+            frames.extend(struct.pack('<h', val))
+
+        wav.writeframes(frames)
+    return buf.getvalue()
 
 
 def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, current_lat, current_lon,
@@ -695,6 +763,56 @@ class TelegramClient:
             log.error(f"Failed to send Telegram photo: {e}")
             return None
 
+    def send_audio(self, audio_bytes, title="🚨 Anchor Alarm", performer="Cerbo GX", caption="", reply_markup=None, chat_id=None):
+        target_chat = chat_id or self.default_chat_id
+        if not self.token or not target_chat:
+            return None
+
+        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+        body = bytearray()
+
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{target_chat}\r\n'.encode("utf-8"))
+
+        if title:
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="title"\r\n\r\n{title}\r\n'.encode("utf-8"))
+
+        if performer:
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="performer"\r\n\r\n{performer}\r\n'.encode("utf-8"))
+
+        if caption:
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'.encode("utf-8"))
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(b'Content-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n')
+
+        if reply_markup:
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="reply_markup"\r\n\r\n{json.dumps(reply_markup)}\r\n'.encode("utf-8"))
+
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(b'Content-Disposition: form-data; name="audio"; filename="alarm.wav"\r\n')
+        body.extend(b"Content-Type: audio/wav\r\n\r\n")
+        body.extend(audio_bytes)
+        body.extend(b"\r\n")
+
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+        url = f"{self.base_url}/sendAudio"
+        try:
+            req = urllib.request.Request(
+                url,
+                data=bytes(body),
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            log.error(f"Failed to send Telegram audio: {e}")
+            return None
+
     def get_updates(self, offset=None, timeout=10):
         if not self.token:
             return []
@@ -733,7 +851,7 @@ class AnchorWatchService:
         self.last_alarm_time = -1000.0
         self.silenced_until = 0.0
         
-        # Alarm cooldowns & baseline states
+        # Alarm Cooldowns & Baseline States
         self.baseline_wind_dir = None
         self.last_squall_alarm_time = -1000.0
         self.last_wind_shift_alarm_time = -1000.0
@@ -773,6 +891,17 @@ class AnchorWatchService:
             except Exception as e:
                 log.error(f"Error loading config {self.config_path}: {e}")
         return cfg
+
+    def save_config(self):
+        try:
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+            tmp = self.config_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.config, f, indent=2)
+            os.replace(tmp, self.config_path)
+            log.info(f"Saved config to {self.config_path}")
+        except Exception as e:
+            log.error(f"Failed to save config: {e}")
 
     def init_dbus(self):
         try:
@@ -940,41 +1069,46 @@ class AnchorWatchService:
                 self.last_track_record_time = now
 
         # 2. Anchor Drag Alarm (Geofence Breach)
-        dist_m = haversine_distance_m(self.current_lat, self.current_lon, self.anchor_lat, self.anchor_lon)
-        if dist_m > self.alarm_radius_m:
-            if now > self.silenced_until and (now - self.last_alarm_time >= 30.0):
-                self.last_alarm_time = now
-                self.trigger_alarm(dist_m)
+        if self.config.get("alarm_drag_enabled", True):
+            dist_m = haversine_distance_m(self.current_lat, self.current_lon, self.anchor_lat, self.anchor_lon)
+            if dist_m > self.alarm_radius_m:
+                if now > self.silenced_until and (now - self.last_alarm_time >= 30.0):
+                    self.last_alarm_time = now
+                    self.trigger_alarm(dist_m)
 
         # 3. Squall / High Wind Warning
-        gust_thresh = float(self.config.get("wind_squall_gust_kn", 25.0))
-        if self.current_wind_speed is not None and self.current_wind_speed >= gust_thresh:
-            if now > self.silenced_until and (now - self.last_squall_alarm_time >= 600.0):
-                self.last_squall_alarm_time = now
-                self.trigger_squall_alarm(self.current_wind_speed, self.current_wind_dir, gust_thresh)
+        if self.config.get("alarm_squall_enabled", True):
+            gust_thresh = float(self.config.get("wind_squall_gust_kn", 25.0))
+            if self.current_wind_speed is not None and self.current_wind_speed >= gust_thresh:
+                if now > self.silenced_until and (now - self.last_squall_alarm_time >= 600.0):
+                    self.last_squall_alarm_time = now
+                    self.trigger_squall_alarm(self.current_wind_speed, self.current_wind_dir, gust_thresh)
 
         # 4. Wind Shift Warning
-        shift_thresh = float(self.config.get("wind_shift_threshold_deg", 60.0))
-        if self.baseline_wind_dir is not None and self.current_wind_dir is not None:
-            shift_diff = abs((self.current_wind_dir - self.baseline_wind_dir + 180.0) % 360.0 - 180.0)
-            if shift_diff >= shift_thresh:
-                if now > self.silenced_until and (now - self.last_wind_shift_alarm_time >= 900.0):
-                    self.last_wind_shift_alarm_time = now
-                    self.trigger_wind_shift_alarm(shift_diff, self.baseline_wind_dir, self.current_wind_dir, shift_thresh)
+        if self.config.get("alarm_wind_shift_enabled", True):
+            shift_thresh = float(self.config.get("wind_shift_threshold_deg", 60.0))
+            if self.baseline_wind_dir is not None and self.current_wind_dir is not None:
+                shift_diff = abs((self.current_wind_dir - self.baseline_wind_dir + 180.0) % 360.0 - 180.0)
+                if shift_diff >= shift_thresh:
+                    if now > self.silenced_until and (now - self.last_wind_shift_alarm_time >= 900.0):
+                        self.last_wind_shift_alarm_time = now
+                        self.trigger_wind_shift_alarm(shift_diff, self.baseline_wind_dir, self.current_wind_dir, shift_thresh)
 
         # 5. Shallow Water / Depth Drop Warning
-        depth_thresh = float(self.config.get("depth_alarm_threshold_m", 2.5))
-        if self.current_depth is not None and self.current_depth <= depth_thresh:
-            if now > self.silenced_until and (now - self.last_depth_alarm_time >= 300.0):
-                self.last_depth_alarm_time = now
-                self.trigger_depth_alarm(self.current_depth, depth_thresh)
+        if self.config.get("alarm_depth_enabled", True):
+            depth_thresh = float(self.config.get("depth_alarm_threshold_m", 2.5))
+            if self.current_depth is not None and self.current_depth <= depth_thresh:
+                if now > self.silenced_until and (now - self.last_depth_alarm_time >= 300.0):
+                    self.last_depth_alarm_time = now
+                    self.trigger_depth_alarm(self.current_depth, depth_thresh)
 
         # 6. Low Battery Warning
-        bat_thresh = float(self.config.get("battery_low_soc_pct", 20.0))
-        if self.current_soc is not None and self.current_soc <= bat_thresh:
-            if now > self.silenced_until and (now - self.last_battery_alarm_time >= 1800.0):
-                self.last_battery_alarm_time = now
-                self.trigger_battery_alarm(self.current_soc, bat_thresh)
+        if self.config.get("alarm_battery_enabled", True):
+            bat_thresh = float(self.config.get("battery_low_soc_pct", 20.0))
+            if self.current_soc is not None and self.current_soc <= bat_thresh:
+                if now > self.silenced_until and (now - self.last_battery_alarm_time >= 1800.0):
+                    self.last_battery_alarm_time = now
+                    self.trigger_battery_alarm(self.current_soc, bat_thresh)
 
     def trigger_alarm(self, dist_m):
         log.warning(f"🚨 ANCHOR DRAG DETECTED: Distance {dist_m:.1f}m exceeds limit {self.alarm_radius_m:.1f}m!")
@@ -1012,6 +1146,14 @@ class AnchorWatchService:
             ]
         }
 
+        # Send loud emergency audio siren if sound alerts enabled
+        if self.config.get("sound_alerts_enabled", True):
+            try:
+                audio = generate_alarm_audio("drag")
+                self.tg.send_audio(audio, title="🚨 ANCHOR DRAG LOUD ALARM", performer="Cerbo GX Siren")
+            except Exception as e:
+                log.debug(f"Could not send alarm audio: {e}")
+
         png = self.render_map()
         if png:
             self.tg.send_photo(png, caption=msg, reply_markup=markup)
@@ -1031,6 +1173,13 @@ class AnchorWatchService:
             f"🔋 <b>Battery:</b> {self.current_soc or 0:.0f}% SoC\n\n"
             f"📍 <a href='{map_url}'>Open Google Maps</a>"
         )
+        if self.config.get("sound_alerts_enabled", True):
+            try:
+                audio = generate_alarm_audio("squall")
+                self.tg.send_audio(audio, title="💨 SQUALL WARNING KLAXON", performer="Cerbo GX Siren")
+            except Exception:
+                pass
+
         png = self.render_map()
         if png:
             self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu())
@@ -1051,6 +1200,13 @@ class AnchorWatchService:
             f"<i>Check lee shore proximity, swing clearance, and swell.</i>\n"
             f"📍 <a href='{map_url}'>Open Google Maps</a>"
         )
+        if self.config.get("sound_alerts_enabled", True):
+            try:
+                audio = generate_alarm_audio("wind_shift")
+                self.tg.send_audio(audio, title="🔄 WIND SHIFT CHIME", performer="Cerbo GX Chime")
+            except Exception:
+                pass
+
         png = self.render_map()
         if png:
             self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu())
@@ -1067,6 +1223,13 @@ class AnchorWatchService:
             f"📍 <b>Position:</b> <code>{self.current_lat or 0:.5f}°, {self.current_lon or 0:.5f}°</code>\n\n"
             f"📍 <a href='{map_url}'>Open Google Maps</a>"
         )
+        if self.config.get("sound_alerts_enabled", True):
+            try:
+                audio = generate_alarm_audio("depth")
+                self.tg.send_audio(audio, title="🌊 SHALLOW WATER SONAR PING", performer="Cerbo GX Sounder")
+            except Exception:
+                pass
+
         self.tg.send_message(msg, reply_markup=self.build_quick_menu())
 
     def trigger_battery_alarm(self, soc_pct, threshold):
@@ -1161,10 +1324,95 @@ class AnchorWatchService:
                 ],
                 [
                     {"text": "📍 Open in Google Maps", "url": map_url},
+                    {"text": "⚙️ Alarm Settings", "callback_data": "settings_menu"}
+                ],
+                [
                     {"text": "❌ Disarm Alarm", "callback_data": "disarm"}
                 ]
             ]
         }
+
+    def build_settings_menu(self):
+        drag_on = self.config.get("alarm_drag_enabled", True)
+        squall_on = self.config.get("alarm_squall_enabled", True)
+        shift_on = self.config.get("alarm_wind_shift_enabled", True)
+        depth_on = self.config.get("alarm_depth_enabled", True)
+        battery_on = self.config.get("alarm_battery_enabled", True)
+        sound_on = self.config.get("sound_alerts_enabled", True)
+
+        squall_val = float(self.config.get("wind_squall_gust_kn", 25.0))
+        shift_val = float(self.config.get("wind_shift_threshold_deg", 60.0))
+        depth_val = float(self.config.get("depth_alarm_threshold_m", 2.5))
+        bat_val = float(self.config.get("battery_low_soc_pct", 20.0))
+
+        base_twd = f"{self.baseline_wind_dir:.0f}°" if self.baseline_wind_dir is not None else "Not Set"
+        cur_twd = f"{self.current_wind_dir:.0f}°" if self.current_wind_dir is not None else "N/A"
+
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": f"🚨 Drag Alarm: {'🟢 ON' if drag_on else '⚪ OFF'}", "callback_data": "toggle_drag"}
+                ],
+                [
+                    {"text": f"💨 Squall ({squall_val:.0f}kn): {'🟢' if squall_on else '⚪'}", "callback_data": "toggle_squall"},
+                    {"text": "➖ 5kn", "callback_data": "squall_minus"},
+                    {"text": "➕ 5kn", "callback_data": "squall_plus"}
+                ],
+                [
+                    {"text": f"🔄 Shift (±{shift_val:.0f}°): {'🟢' if shift_on else '⚪'}", "callback_data": "toggle_shift"},
+                    {"text": "➖ 15°", "callback_data": "shift_minus"},
+                    {"text": "➕ 15°", "callback_data": "shift_plus"}
+                ],
+                [
+                    {"text": f"🎯 Reset Baseline TWD (Base: {base_twd} | Cur: {cur_twd})", "callback_data": "reset_twd"}
+                ],
+                [
+                    {"text": f"🌊 Depth ({depth_val:.1f}m): {'🟢' if depth_on else '⚪'}", "callback_data": "toggle_depth"},
+                    {"text": "➖ 0.5m", "callback_data": "depth_minus"},
+                    {"text": "➕ 0.5m", "callback_data": "depth_plus"}
+                ],
+                [
+                    {"text": f"🔋 Battery ({bat_val:.0f}%): {'🟢' if battery_on else '⚪'}", "callback_data": "toggle_battery"},
+                    {"text": "➖ 5%", "callback_data": "bat_minus"},
+                    {"text": "➕ 5%", "callback_data": "bat_plus"}
+                ],
+                [
+                    {"text": f"🔊 Loud Siren Audio: {'🟢 ON' if sound_on else '⚪ OFF'}", "callback_data": "toggle_sound"}
+                ],
+                [
+                    {"text": "⬅️ Back to Main Menu", "callback_data": "main_menu"}
+                ]
+            ]
+        }
+
+    def format_settings_message(self):
+        drag_on = "🟢 ON" if self.config.get("alarm_drag_enabled", True) else "⚪ OFF"
+        squall_on = "🟢 ON" if self.config.get("alarm_squall_enabled", True) else "⚪ OFF"
+        shift_on = "🟢 ON" if self.config.get("alarm_wind_shift_enabled", True) else "⚪ OFF"
+        depth_on = "🟢 ON" if self.config.get("alarm_depth_enabled", True) else "⚪ OFF"
+        battery_on = "🟢 ON" if self.config.get("alarm_battery_enabled", True) else "⚪ OFF"
+        sound_on = "🟢 ON" if self.config.get("sound_alerts_enabled", True) else "⚪ OFF"
+
+        squall_val = float(self.config.get("wind_squall_gust_kn", 25.0))
+        shift_val = float(self.config.get("wind_shift_threshold_deg", 60.0))
+        depth_val = float(self.config.get("depth_alarm_threshold_m", 2.5))
+        bat_val = float(self.config.get("battery_low_soc_pct", 20.0))
+
+        base_twd = f"{self.baseline_wind_dir:.0f}°" if self.baseline_wind_dir is not None else "Not Set"
+        cur_twd = f"{self.current_wind_dir:.0f}°" if self.current_wind_dir is not None else "N/A"
+
+        msg = (
+            f"⚙️ <b>Smart Anchor Watch Settings</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• 🚨 <b>Anchor Drag:</b> {drag_on} (Limit: {self.alarm_radius_m:.0f}m)\n"
+            f"• 💨 <b>Squall Alarm:</b> {squall_on} (Limit: <b>{squall_val:.0f} kn</b>)\n"
+            f"• 🔄 <b>Wind Shift:</b> {shift_on} (Sector: <b>±{shift_val:.0f}°</b> | Baseline: <b>{base_twd}</b>)\n"
+            f"• 🌊 <b>Shallow Water:</b> {depth_on} (Limit: <b>{depth_val:.1f} m</b>)\n"
+            f"• 🔋 <b>Low Battery:</b> {battery_on} (Limit: <b>{bat_val:.0f}%</b>)\n"
+            f"• 🔊 <b>Loud Siren Audio:</b> {sound_on}\n\n"
+            f"<i>Use the controls below to toggle alarms or adjust limits:</i>"
+        )
+        return msg
 
     def format_status_message(self):
         self.poll_sensors()
@@ -1207,6 +1455,9 @@ class AnchorWatchService:
             msg = "⚓ <b>Cerbo GX Smart Anchor Watch</b>\nUse the quick buttons below or type /status:"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
             
+        elif cmd in ("/settings", "/alarms", "/config"):
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
         elif cmd in ("/status", "/anchor", "/map"):
             if len(parts) > 1 and parts[1].lower() == "reset":
                 dist = float(parts[2]) if len(parts) > 2 and parts[2].isdigit() else self.rode_m
@@ -1337,6 +1588,95 @@ class AnchorWatchService:
         elif data == "disarm":
             self.disarm()
             self.tg.send_message("⚪ <b>Anchor Watch Disarmed.</b>", reply_markup=self.build_quick_menu(), chat_id=chat_id)
+
+        # ----------------------------------------------------
+        # SETTINGS MENU & PER-ALARM TOGGLE / ADJUSTMENT HANDLERS
+        # ----------------------------------------------------
+        elif data in ("settings_menu", "settings"):
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "main_menu":
+            self.tg.send_message("⚓ <b>Main Menu:</b>", reply_markup=self.build_quick_menu(), chat_id=chat_id)
+
+        elif data == "toggle_drag":
+            self.config["alarm_drag_enabled"] = not self.config.get("alarm_drag_enabled", True)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "toggle_squall":
+            self.config["alarm_squall_enabled"] = not self.config.get("alarm_squall_enabled", True)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "squall_plus":
+            self.config["wind_squall_gust_kn"] = min(60.0, float(self.config.get("wind_squall_gust_kn", 25.0)) + 5.0)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "squall_minus":
+            self.config["wind_squall_gust_kn"] = max(10.0, float(self.config.get("wind_squall_gust_kn", 25.0)) - 5.0)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "toggle_shift":
+            self.config["alarm_wind_shift_enabled"] = not self.config.get("alarm_wind_shift_enabled", True)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "shift_plus":
+            self.config["wind_shift_threshold_deg"] = min(180.0, float(self.config.get("wind_shift_threshold_deg", 60.0)) + 15.0)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "shift_minus":
+            self.config["wind_shift_threshold_deg"] = max(15.0, float(self.config.get("wind_shift_threshold_deg", 60.0)) - 15.0)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "reset_twd":
+            self.poll_sensors()
+            if self.current_wind_dir is not None:
+                self.baseline_wind_dir = self.current_wind_dir
+                card = wind_direction_cardinal(self.baseline_wind_dir)
+                msg = f"🎯 <b>Baseline Wind Direction Reset to Current:</b>\n• Baseline TWD: <b>{self.baseline_wind_dir:.0f}° {card}</b>\n• Alert Sector: <b>±{self.config.get('wind_shift_threshold_deg', 60):.0f}°</b>"
+            else:
+                msg = "⚠️ Current wind direction is not available to set baseline."
+            self.tg.send_message(msg, reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "toggle_depth":
+            self.config["alarm_depth_enabled"] = not self.config.get("alarm_depth_enabled", True)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "depth_plus":
+            self.config["depth_alarm_threshold_m"] = min(15.0, float(self.config.get("depth_alarm_threshold_m", 2.5)) + 0.5)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "depth_minus":
+            self.config["depth_alarm_threshold_m"] = max(0.5, float(self.config.get("depth_alarm_threshold_m", 2.5)) - 0.5)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "toggle_battery":
+            self.config["alarm_battery_enabled"] = not self.config.get("alarm_battery_enabled", True)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "bat_plus":
+            self.config["battery_low_soc_pct"] = min(60.0, float(self.config.get("battery_low_soc_pct", 20.0)) + 5.0)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "bat_minus":
+            self.config["battery_low_soc_pct"] = max(5.0, float(self.config.get("battery_low_soc_pct", 20.0)) - 5.0)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif data == "toggle_sound":
+            self.config["sound_alerts_enabled"] = not self.config.get("sound_alerts_enabled", True)
+            self.save_config()
+            self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
 
 
 def main():

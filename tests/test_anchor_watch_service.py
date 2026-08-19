@@ -209,3 +209,60 @@ def test_depth_alarm_trigger():
     svc.check_geofence()
     assert len(depth_events) == 1
     assert depth_events[0][0] == 2.1
+
+
+def test_alarm_sound_generation():
+    for st in ("drag", "squall", "depth", "wind_shift"):
+        wav_data = aws.generate_alarm_audio(st, duration_s=1.0)
+        assert len(wav_data) > 1000
+        assert wav_data[:4] == b"RIFF"
+        assert wav_data[8:12] == b"WAVE"
+
+
+def test_settings_menu_and_per_alarm_toggles():
+    svc = aws.AnchorWatchService(config_path="/tmp/test_anchor_config_settings.json")
+    
+    # Toggle drag
+    assert svc.config.get("alarm_drag_enabled", True) is True
+    svc.handle_callback_query({"data": "toggle_drag", "message": {"chat": {"id": 12345}}})
+    assert svc.config.get("alarm_drag_enabled") is False
+    svc.handle_callback_query({"data": "toggle_drag", "message": {"chat": {"id": 12345}}})
+    assert svc.config.get("alarm_drag_enabled") is True
+
+    # Adjust squall
+    svc.config["wind_squall_gust_kn"] = 25.0
+    svc.handle_callback_query({"data": "squall_plus", "message": {"chat": {"id": 12345}}})
+    assert svc.config["wind_squall_gust_kn"] == 30.0
+    svc.handle_callback_query({"data": "squall_minus", "message": {"chat": {"id": 12345}}})
+    assert svc.config["wind_squall_gust_kn"] == 25.0
+
+    # Adjust shift
+    svc.config["wind_shift_threshold_deg"] = 60.0
+    svc.handle_callback_query({"data": "shift_plus", "message": {"chat": {"id": 12345}}})
+    assert svc.config["wind_shift_threshold_deg"] == 75.0
+    svc.handle_callback_query({"data": "shift_minus", "message": {"chat": {"id": 12345}}})
+    assert svc.config["wind_shift_threshold_deg"] == 60.0
+
+    # Reset TWD baseline
+    svc.current_wind_dir = 285.0
+    svc.handle_callback_query({"data": "reset_twd", "message": {"chat": {"id": 12345}}})
+    assert svc.baseline_wind_dir == 285.0
+
+    # Adjust depth
+    svc.config["depth_alarm_threshold_m"] = 2.5
+    svc.handle_callback_query({"data": "depth_plus", "message": {"chat": {"id": 12345}}})
+    assert svc.config["depth_alarm_threshold_m"] == 3.0
+    svc.handle_callback_query({"data": "depth_minus", "message": {"chat": {"id": 12345}}})
+    assert svc.config["depth_alarm_threshold_m"] == 2.5
+
+    # Check menu building
+    menu = svc.build_settings_menu()
+    assert "inline_keyboard" in menu
+    buttons = [btn["text"] for row in menu["inline_keyboard"] for btn in row]
+    assert any("Drag" in b for b in buttons)
+    assert any("Squall" in b for b in buttons)
+    assert any("Shift" in b for b in buttons)
+    assert any("Reset Baseline TWD" in b for b in buttons)
+    assert any("Depth" in b for b in buttons)
+    assert any("Battery" in b for b in buttons)
+    assert any("Siren" in b for b in buttons)
