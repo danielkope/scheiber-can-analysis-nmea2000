@@ -207,12 +207,11 @@ do
 done
 ```
 
-## Node-RED Anchor Light Sunset/Sunrise automation
+## Node-RED Automations & Alarms
 
-The repository includes a ready-to-use Node-RED flow for Anchor Light Auto mode:
-[`node-red-anchor-light-flow.json`](./node-red-anchor-light-flow.json).
+The repository includes ready-to-use Node-RED flows installed automatically when Node-RED is present:
 
-### Behavior
+### 1. Anchor Light Sunset/Sunrise Automation (`node-red-anchor-light-flow.json`)
 - Listens to `/SwitchableOutput/anchor_light/Auto` on `com.victronenergy.switch.scheiber`.
 - When `Auto = 0` (Manual), the flow is inactive and preserves manual switch control.
 - When `Auto = 1` (Auto mode):
@@ -220,6 +219,14 @@ The repository includes a ready-to-use Node-RED flow for Anchor Light Auto mode:
   - Computes astronomical sunrise and sunset times (NOAA solar algorithm).
   - Automatically commands `/SwitchableOutput/anchor_light/State` to `1` (ON) at sunset (15 min buffer) and `0` (OFF) at sunrise (30 min buffer).
   - Prevents command loops by only writing to D-Bus when state changes are needed.
+
+### 2. Bilge Alarms & Continuous Monitoring (`node-red-bilge-alarms-flow.json`)
+- Tracks authoritative running status for Port & Starboard bilges via `/GenericInput/bilge_{port,starboard}_running/Value` (`0x02141808`).
+- **2-Minute Warning**: Emits Venus GUI Warning if continuous pumping exceeds 2 minutes.
+- **5-Minute Critical Alarm**: Emits Venus GUI Critical Alarm (potential water ingress) if continuous pumping exceeds 5 minutes. (Never stops the pump automatically).
+- **Mode OFF Anomaly**: Immediate critical alarm if a bilge pump is running while its GX switch is in `OFF` mode.
+- **Frequent Cycling Warning**: Alerts if a bilge cycles 4 or more times within a 60-minute window.
+- Injects notifications directly into Venus GUI (`/Notifications/Inject` on `com.victronenergy.platform`), triggering UI banners, VRM alerts, and the Cerbo buzzer.
 
 Read [`../docs/SWITCH_SERVICE_HANDOVER.md`](../docs/SWITCH_SERVICE_HANDOVER.md)
 for the architecture, safety rules, field evidence, rollback procedure, and

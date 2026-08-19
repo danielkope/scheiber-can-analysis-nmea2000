@@ -74,6 +74,7 @@ fetch_file "scheiber_switch_protocol.py" "$STAGE/scheiber_switch_protocol.py"
 fetch_file "switch_service.py" "$STAGE/switch_service.py"
 fetch_file "service-switch/run" "$STAGE/run-switch"
 fetch_file "node-red-anchor-light-flow.json" "$STAGE/node-red-anchor-light-flow.json"
+fetch_file "node-red-bilge-alarms-flow.json" "$STAGE/node-red-bilge-alarms-flow.json"
 
 python3 -m py_compile \
     "$STAGE/bridge.py" \
@@ -162,13 +163,14 @@ mv "$STAGE/switch_service.py" "$APP_DIR/switch_service.py"
 mv "$STAGE/run-main" "$APP_DIR/service/run"
 mv "$STAGE/run-switch" "$APP_DIR/service-switch/run"
 mv "$STAGE/node-red-anchor-light-flow.json" "$APP_DIR/node-red-anchor-light-flow.json"
+mv "$STAGE/node-red-bilge-alarms-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json"
 chmod 755 \
     "$APP_DIR/bridge.py" \
     "$APP_DIR/resolve_can_interface.py" \
     "$APP_DIR/switch_service.py" \
     "$APP_DIR/service/run" \
     "$APP_DIR/service-switch/run"
-chmod 644 "$APP_DIR/scheiber_switch_protocol.py" "$APP_DIR/node-red-anchor-light-flow.json"
+chmod 644 "$APP_DIR/scheiber_switch_protocol.py" "$APP_DIR/node-red-anchor-light-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json"
 rm -rf "$STAGE"
 
 # Remove obsolete packaging files from earlier installer revisions.
@@ -253,29 +255,30 @@ else
     echo "WARNING: svc was not found; service links are installed and will start on boot." >&2
 fi
 
-# Auto-install or update the Node-RED Anchor Light Auto flow if Node-RED is present
+# Auto-install or update the Node-RED flows (Anchor Auto, Bilge Alarms) if Node-RED is present
 nodered_status="skipped (Node-RED flows not found)"
 for candidate_flow in /data/home/nodered/.node-red/flows.json /data/nodered/flows.json /root/.node-red/flows.json; do
     if [ -f "$candidate_flow" ]; then
         if python3 -c "
 import json, sys
 flow_path = sys.argv[1]
-template_path = sys.argv[2]
-tab_id = 'anchor_light_auto_tab'
+template_paths = sys.argv[2:]
 try:
     with open(flow_path, 'r', encoding='utf-8') as f:
         flows = json.load(f)
-    with open(template_path, 'r', encoding='utf-8') as f:
-        new_nodes = json.load(f)
-    filtered = [n for n in flows if n.get('z') != tab_id and n.get('id') != tab_id]
-    filtered.extend(new_nodes)
+    for template_path in template_paths:
+        with open(template_path, 'r', encoding='utf-8') as f:
+            new_nodes = json.load(f)
+        tab_ids = {n['id'] for n in new_nodes if n.get('type') == 'tab'}
+        flows = [n for n in flows if n.get('z') not in tab_ids and n.get('id') not in tab_ids]
+        flows.extend(new_nodes)
     with open(flow_path + '.bak', 'w', encoding='utf-8') as f:
         json.dump(flows, f, indent=2)
     with open(flow_path, 'w', encoding='utf-8') as f:
-        json.dump(filtered, f, indent=2)
+        json.dump(flows, f, indent=2)
 except Exception as e:
     sys.exit(1)
-" "$candidate_flow" "$APP_DIR/node-red-anchor-light-flow.json" 2>/dev/null; then
+" "$candidate_flow" "$APP_DIR/node-red-anchor-light-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json" 2>/dev/null; then
             chown nodered:nodered "$candidate_flow" 2>/dev/null || true
             chmod 644 "$candidate_flow" 2>/dev/null || true
             nodered_status="installed to $candidate_flow"

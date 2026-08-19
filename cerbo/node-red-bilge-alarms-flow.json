@@ -1,0 +1,446 @@
+[
+  {
+    "id": "bilge_alarms_tab",
+    "type": "tab",
+    "label": "Bilge Alarms & Monitor",
+    "disabled": false,
+    "info": "Real-time bilge monitoring, 2-minute warning, 5-minute critical alarm, and mode-OFF anomaly detection."
+  },
+  {
+    "id": "node_in_port_running",
+    "type": "victron-input-switch",
+    "z": "bilge_alarms_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/GenericInput/bilge_port_running/Value",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/GenericInput/bilge_port_running/Value",
+      "type": "integer",
+      "name": "Port Bilge Activity"
+    },
+    "initial": "",
+    "name": "Port Bilge Running (CAN)",
+    "onlyChanges": false,
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "node_port_change_running_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_port_change_running_topic",
+    "type": "change",
+    "z": "bilge_alarms_tab",
+    "name": "topic = running",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "running",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 390,
+    "y": 80,
+    "wires": [
+      [
+        "node_port_bilge_monitor"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_port_auto",
+    "type": "victron-input-switch",
+    "z": "bilge_alarms_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/SwitchableOutput/bilge_port/Auto",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/SwitchableOutput/bilge_port/Auto",
+      "type": "enum",
+      "name": "Port Bilge auto mode",
+      "enum": {
+        "0": "Manual",
+        "1": "Auto"
+      }
+    },
+    "initial": "",
+    "name": "Port Bilge Auto Mode",
+    "onlyChanges": false,
+    "x": 150,
+    "y": 140,
+    "wires": [
+      [
+        "node_port_change_auto_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_port_change_auto_topic",
+    "type": "change",
+    "z": "bilge_alarms_tab",
+    "name": "topic = auto",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "auto",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 390,
+    "y": 140,
+    "wires": [
+      [
+        "node_port_bilge_monitor"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_port_state",
+    "type": "victron-input-switch",
+    "z": "bilge_alarms_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/SwitchableOutput/bilge_port/State",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/SwitchableOutput/bilge_port/State",
+      "type": "enum",
+      "name": "Port Bilge state",
+      "enum": {
+        "0": "Off",
+        "1": "On"
+      }
+    },
+    "initial": "",
+    "name": "Port Bilge State / Lamp",
+    "onlyChanges": false,
+    "x": 160,
+    "y": 200,
+    "wires": [
+      [
+        "node_port_change_state_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_port_change_state_topic",
+    "type": "change",
+    "z": "bilge_alarms_tab",
+    "name": "topic = state",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "state",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 390,
+    "y": 200,
+    "wires": [
+      [
+        "node_port_bilge_monitor"
+      ]
+    ]
+  },
+  {
+    "id": "node_inject_bilge_tick",
+    "type": "inject",
+    "z": "bilge_alarms_tab",
+    "name": "Tick Every 5s",
+    "props": [
+      {
+        "p": "topic",
+        "v": "tick",
+        "vt": "str"
+      },
+      {
+        "p": "payload",
+        "v": "",
+        "vt": "date"
+      }
+    ],
+    "repeat": "5",
+    "crontab": "",
+    "once": true,
+    "onceDelay": 1.0,
+    "topic": "tick",
+    "x": 140,
+    "y": 260,
+    "wires": [
+      [
+        "node_port_bilge_monitor"
+      ],
+      [
+        "node_starboard_bilge_monitor"
+      ]
+    ]
+  },
+  {
+    "id": "node_port_bilge_monitor",
+    "type": "function",
+    "z": "bilge_alarms_tab",
+    "name": "Port Bilge Alarm Engine",
+    "func": "// Port Bilge Monitor & Alarm Engine\nconst SIDE = \"Port\";\nconst WARN_SECONDS = 120;   // 2 minutes warning\nconst ALARM_SECONDS = 300;  // 5 minutes critical alarm\nconst MAX_CYCLES_PER_HOUR = 4;\n\nlet running = context.get('running') || 0;\nlet runStartTime = context.get('run_start_time') || null;\nlet warningSent = context.get('warning_sent') || false;\nlet alarmSent = context.get('alarm_sent') || false;\nlet offAnomalySent = context.get('off_anomaly_sent') || false;\nlet cycleHistory = context.get('cycle_history') || [];\nlet autoMode = context.get('auto_mode') !== undefined ? context.get('auto_mode') : 1;\nlet switchState = context.get('switch_state') !== undefined ? context.get('switch_state') : 0;\n\nconst now = Date.now();\nconst outputs = [];\n\nif (msg.topic === 'running') {\n    const newRunning = Number(msg.payload) === 1 ? 1 : 0;\n    if (newRunning === 1 && running === 0) {\n        // Transition to RUNNING\n        running = 1;\n        runStartTime = now;\n        warningSent = false;\n        alarmSent = false;\n        offAnomalySent = false;\n        cycleHistory.push(now);\n        cycleHistory = cycleHistory.filter(t => (now - t) <= 3600000);\n        \n        if (cycleHistory.length >= MAX_CYCLES_PER_HOUR) {\n            outputs.push({\n                type: 0,\n                title: `${SIDE} Bilge Frequency Warning`,\n                payload: `${SIDE} Bilge pump has cycled ${cycleHistory.length} times in the last hour.`,\n                event: \"FREQUENT_CYCLES\"\n            });\n        }\n    } else if (newRunning === 0 && running === 1) {\n        // Transition to STOPPED\n        const duration = runStartTime ? Math.floor((now - runStartTime) / 1000) : 0;\n        if (warningSent || alarmSent || offAnomalySent) {\n            outputs.push({\n                type: 2,\n                title: `${SIDE} Bilge Stopped`,\n                payload: `${SIDE} Bilge pump stopped after running for ${duration}s.`,\n                event: \"PUMP_STOPPED\"\n            });\n        }\n        running = 0;\n        runStartTime = null;\n        warningSent = false;\n        alarmSent = false;\n        offAnomalySent = false;\n    }\n} else if (msg.topic === 'auto') {\n    autoMode = Number(msg.payload) === 1 ? 1 : 0;\n} else if (msg.topic === 'state') {\n    switchState = Number(msg.payload) === 1 ? 1 : 0;\n}\n\nlet mode = \"OFF\";\nif (autoMode === 1) mode = \"AUTO\";\nif (switchState === 1) mode = \"MANUAL\";\n\nif (running === 1 && runStartTime) {\n    const durationSec = Math.floor((now - runStartTime) / 1000);\n    \n    // 1. Off Anomaly Alarm: pump running while switched OFF\n    if (mode === \"OFF\" && !offAnomalySent) {\n        outputs.push({\n            type: 1,\n            title: `${SIDE} Bilge Critical`,\n            payload: `ANOMALY: ${SIDE} Bilge pump is running while switched OFF!`,\n            event: \"OFF_ANOMALY\"\n        });\n        offAnomalySent = true;\n    }\n    \n    // 2. Continuous Run 5-Minute Critical Alarm\n    if (durationSec >= ALARM_SECONDS && !alarmSent) {\n        outputs.push({\n            type: 1,\n            title: `${SIDE} Bilge Critical Alarm`,\n            payload: `CRITICAL: ${SIDE} Bilge pump running > 5 minutes (${Math.floor(durationSec/60)}m)! Check for water ingress.`,\n            event: \"RUN_5MIN_ALARM\"\n        });\n        alarmSent = true;\n    } else if (durationSec >= WARN_SECONDS && !warningSent) {\n        // 3. Continuous Run 2-Minute Warning\n        outputs.push({\n            type: 0,\n            title: `${SIDE} Bilge Warning`,\n            payload: `${SIDE} Bilge pump running continuously for > 2 minutes (${durationSec}s).`,\n            event: \"RUN_2MIN_WARNING\"\n        });\n        warningSent = true;\n    }\n    \n    const statusColor = durationSec >= ALARM_SECONDS ? \"red\" : durationSec >= WARN_SECONDS ? \"yellow\" : \"green\";\n    node.status({ fill: statusColor, shape: \"dot\", text: `RUNNING (${durationSec}s, Mode: ${mode})` });\n} else {\n    const recentCycles = cycleHistory.filter(t => (now - t) <= 3600000).length;\n    node.status({ fill: \"grey\", shape: \"ring\", text: `Idle (${recentCycles} cycles/hr, Mode: ${mode})` });\n}\n\ncontext.set('running', running);\ncontext.set('run_start_time', runStartTime);\ncontext.set('warning_sent', warningSent);\ncontext.set('alarm_sent', alarmSent);\ncontext.set('off_anomaly_sent', offAnomalySent);\ncontext.set('cycle_history', cycleHistory);\ncontext.set('auto_mode', autoMode);\ncontext.set('switch_state', switchState);\n\nif (outputs.length > 0) {\n    return [outputs];\n}\nreturn null;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 650,
+    "y": 140,
+    "wires": [
+      [
+        "node_victron_notification_inject",
+        "node_debug_bilge_alarms"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_stbd_running",
+    "type": "victron-input-switch",
+    "z": "bilge_alarms_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/GenericInput/bilge_starboard_running/Value",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/GenericInput/bilge_starboard_running/Value",
+      "type": "integer",
+      "name": "Starboard Bilge Activity"
+    },
+    "initial": "",
+    "name": "Starboard Bilge Running (CAN)",
+    "onlyChanges": false,
+    "x": 170,
+    "y": 340,
+    "wires": [
+      [
+        "node_stbd_change_running_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_stbd_change_running_topic",
+    "type": "change",
+    "z": "bilge_alarms_tab",
+    "name": "topic = running",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "running",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 410,
+    "y": 340,
+    "wires": [
+      [
+        "node_starboard_bilge_monitor"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_stbd_auto",
+    "type": "victron-input-switch",
+    "z": "bilge_alarms_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/SwitchableOutput/bilge_starboard/Auto",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/SwitchableOutput/bilge_starboard/Auto",
+      "type": "enum",
+      "name": "Starboard Bilge auto mode",
+      "enum": {
+        "0": "Manual",
+        "1": "Auto"
+      }
+    },
+    "initial": "",
+    "name": "Starboard Bilge Auto Mode",
+    "onlyChanges": false,
+    "x": 160,
+    "y": 400,
+    "wires": [
+      [
+        "node_stbd_change_auto_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_stbd_change_auto_topic",
+    "type": "change",
+    "z": "bilge_alarms_tab",
+    "name": "topic = auto",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "auto",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 410,
+    "y": 400,
+    "wires": [
+      [
+        "node_starboard_bilge_monitor"
+      ]
+    ]
+  },
+  {
+    "id": "node_in_stbd_state",
+    "type": "victron-input-switch",
+    "z": "bilge_alarms_tab",
+    "service": "com.victronenergy.switch/55",
+    "path": "/SwitchableOutput/bilge_starboard/State",
+    "serviceObj": {
+      "service": "com.victronenergy.switch/55",
+      "name": "Scheiber V8 Switchboard"
+    },
+    "pathObj": {
+      "path": "/SwitchableOutput/bilge_starboard/State",
+      "type": "enum",
+      "name": "Starboard Bilge state",
+      "enum": {
+        "0": "Off",
+        "1": "On"
+      }
+    },
+    "initial": "",
+    "name": "Starboard Bilge State / Lamp",
+    "onlyChanges": false,
+    "x": 170,
+    "y": 460,
+    "wires": [
+      [
+        "node_stbd_change_state_topic"
+      ]
+    ]
+  },
+  {
+    "id": "node_stbd_change_state_topic",
+    "type": "change",
+    "z": "bilge_alarms_tab",
+    "name": "topic = state",
+    "rules": [
+      {
+        "t": "set",
+        "p": "topic",
+        "pt": "msg",
+        "to": "state",
+        "tot": "str"
+      }
+    ],
+    "action": "",
+    "property": "",
+    "from": "",
+    "to": "",
+    "reg": false,
+    "x": 410,
+    "y": 460,
+    "wires": [
+      [
+        "node_starboard_bilge_monitor"
+      ]
+    ]
+  },
+  {
+    "id": "node_starboard_bilge_monitor",
+    "type": "function",
+    "z": "bilge_alarms_tab",
+    "name": "Starboard Bilge Alarm Engine",
+    "func": "// Starboard Bilge Monitor & Alarm Engine\nconst SIDE = \"Starboard\";\nconst WARN_SECONDS = 120;   // 2 minutes warning\nconst ALARM_SECONDS = 300;  // 5 minutes critical alarm\nconst MAX_CYCLES_PER_HOUR = 4;\n\nlet running = context.get('running') || 0;\nlet runStartTime = context.get('run_start_time') || null;\nlet warningSent = context.get('warning_sent') || false;\nlet alarmSent = context.get('alarm_sent') || false;\nlet offAnomalySent = context.get('off_anomaly_sent') || false;\nlet cycleHistory = context.get('cycle_history') || [];\nlet autoMode = context.get('auto_mode') !== undefined ? context.get('auto_mode') : 1;\nlet switchState = context.get('switch_state') !== undefined ? context.get('switch_state') : 0;\n\nconst now = Date.now();\nconst outputs = [];\n\nif (msg.topic === 'running') {\n    const newRunning = Number(msg.payload) === 1 ? 1 : 0;\n    if (newRunning === 1 && running === 0) {\n        // Transition to RUNNING\n        running = 1;\n        runStartTime = now;\n        warningSent = false;\n        alarmSent = false;\n        offAnomalySent = false;\n        cycleHistory.push(now);\n        cycleHistory = cycleHistory.filter(t => (now - t) <= 3600000);\n        \n        if (cycleHistory.length >= MAX_CYCLES_PER_HOUR) {\n            outputs.push({\n                type: 0,\n                title: `${SIDE} Bilge Frequency Warning`,\n                payload: `${SIDE} Bilge pump has cycled ${cycleHistory.length} times in the last hour.`,\n                event: \"FREQUENT_CYCLES\"\n            });\n        }\n    } else if (newRunning === 0 && running === 1) {\n        // Transition to STOPPED\n        const duration = runStartTime ? Math.floor((now - runStartTime) / 1000) : 0;\n        if (warningSent || alarmSent || offAnomalySent) {\n            outputs.push({\n                type: 2,\n                title: `${SIDE} Bilge Stopped`,\n                payload: `${SIDE} Bilge pump stopped after running for ${duration}s.`,\n                event: \"PUMP_STOPPED\"\n            });\n        }\n        running = 0;\n        runStartTime = null;\n        warningSent = false;\n        alarmSent = false;\n        offAnomalySent = false;\n    }\n} else if (msg.topic === 'auto') {\n    autoMode = Number(msg.payload) === 1 ? 1 : 0;\n} else if (msg.topic === 'state') {\n    switchState = Number(msg.payload) === 1 ? 1 : 0;\n}\n\nlet mode = \"OFF\";\nif (autoMode === 1) mode = \"AUTO\";\nif (switchState === 1) mode = \"MANUAL\";\n\nif (running === 1 && runStartTime) {\n    const durationSec = Math.floor((now - runStartTime) / 1000);\n    \n    // 1. Off Anomaly Alarm: pump running while switched OFF\n    if (mode === \"OFF\" && !offAnomalySent) {\n        outputs.push({\n            type: 1,\n            title: `${SIDE} Bilge Critical`,\n            payload: `ANOMALY: ${SIDE} Bilge pump is running while switched OFF!`,\n            event: \"OFF_ANOMALY\"\n        });\n        offAnomalySent = true;\n    }\n    \n    // 2. Continuous Run 5-Minute Critical Alarm\n    if (durationSec >= ALARM_SECONDS && !alarmSent) {\n        outputs.push({\n            type: 1,\n            title: `${SIDE} Bilge Critical Alarm`,\n            payload: `CRITICAL: ${SIDE} Bilge pump running > 5 minutes (${Math.floor(durationSec/60)}m)! Check for water ingress.`,\n            event: \"RUN_5MIN_ALARM\"\n        });\n        alarmSent = true;\n    } else if (durationSec >= WARN_SECONDS && !warningSent) {\n        // 3. Continuous Run 2-Minute Warning\n        outputs.push({\n            type: 0,\n            title: `${SIDE} Bilge Warning`,\n            payload: `${SIDE} Bilge pump running continuously for > 2 minutes (${durationSec}s).`,\n            event: \"RUN_2MIN_WARNING\"\n        });\n        warningSent = true;\n    }\n    \n    const statusColor = durationSec >= ALARM_SECONDS ? \"red\" : durationSec >= WARN_SECONDS ? \"yellow\" : \"green\";\n    node.status({ fill: statusColor, shape: \"dot\", text: `RUNNING (${durationSec}s, Mode: ${mode})` });\n} else {\n    const recentCycles = cycleHistory.filter(t => (now - t) <= 3600000).length;\n    node.status({ fill: \"grey\", shape: \"ring\", text: `Idle (${recentCycles} cycles/hr, Mode: ${mode})` });\n}\n\ncontext.set('running', running);\ncontext.set('run_start_time', runStartTime);\ncontext.set('warning_sent', warningSent);\ncontext.set('alarm_sent', alarmSent);\ncontext.set('off_anomaly_sent', offAnomalySent);\ncontext.set('cycle_history', cycleHistory);\ncontext.set('auto_mode', autoMode);\ncontext.set('switch_state', switchState);\n\nif (outputs.length > 0) {\n    return [outputs];\n}\nreturn null;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 670,
+    "y": 400,
+    "wires": [
+      [
+        "node_victron_notification_inject",
+        "node_debug_bilge_alarms"
+      ]
+    ]
+  },
+  {
+    "id": "node_victron_notification_inject",
+    "type": "victron-inject",
+    "z": "bilge_alarms_tab",
+    "name": "Venus GUI Notification Injector",
+    "notificationType": 0,
+    "notificationTitle": "Bilge Alarm",
+    "x": 980,
+    "y": 240,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "node_debug_bilge_alarms",
+    "type": "debug",
+    "z": "bilge_alarms_tab",
+    "name": "Bilge Alarm Events",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 950,
+    "y": 300,
+    "wires": []
+  }
+]
