@@ -302,65 +302,113 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.move_to(30, 85)
     ctx.show_text(f"SOG: {current_sog:.1f} kn   TRACK POINTS: {len(track_points)}")
 
-    # 10. Floating Wind Rose in Top Right
+    # 10. North-Up Compass Indicator (Top Left)
+    nu_x = 55
+    nu_y = 155
+    ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
+    ctx.rectangle(nu_x - 30, nu_y - 42, 60, 84)
+    ctx.fill()
+    ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
+    ctx.set_line_width(1.0)
+    ctx.rectangle(nu_x - 30, nu_y - 42, 60, 84)
+    ctx.stroke()
+
+    # Red North Pointer
+    ctx.set_source_rgb(0.95, 0.25, 0.25)
+    ctx.move_to(nu_x, nu_y - 28)
+    ctx.line_to(nu_x - 7, nu_y - 4)
+    ctx.line_to(nu_x + 7, nu_y - 4)
+    ctx.close_path()
+    ctx.fill()
+
+    # White South Pointer
+    ctx.set_source_rgb(0.7, 0.8, 0.9)
+    ctx.move_to(nu_x, nu_y + 20)
+    ctx.line_to(nu_x - 7, nu_y - 4)
+    ctx.line_to(nu_x + 7, nu_y - 4)
+    ctx.close_path()
+    ctx.fill()
+
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    ctx.set_font_size(11)
+    ctx.set_source_rgb(1.0, 1.0, 1.0)
+    ctx.move_to(nu_x - 4, nu_y - 31)
+    ctx.show_text("N")
+
+    ctx.set_font_size(9)
+    ctx.set_source_rgba(0.6, 0.8, 1.0, 0.9)
+    ctx.move_to(nu_x - 22, nu_y + 35)
+    ctx.show_text("NORTH UP")
+
+    # 11. Floating Wind Rose in Top Right
     if current_wind_dir is not None:
-        wr_x = width - 75
+        wr_x = width - 85
         wr_y = 155
-        wr_rad = 42.0
+        wr_rad = 38.0
 
         ctx.set_source_rgba(0.02, 0.05, 0.09, 0.85)
-        ctx.arc(wr_x, wr_y, wr_rad + 8, 0, 2 * math.pi)
+        ctx.rectangle(wr_x - 48, wr_y - 42, 96, 84)
         ctx.fill()
         ctx.set_source_rgba(0.2, 0.4, 0.6, 0.5)
         ctx.set_line_width(1.0)
-        ctx.arc(wr_x, wr_y, wr_rad + 8, 0, 2 * math.pi)
+        ctx.rectangle(wr_x - 48, wr_y - 42, 96, 84)
         ctx.stroke()
+
+        # Header
+        ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        ctx.set_font_size(9)
+        ctx.set_source_rgba(0.0, 0.9, 1.0, 0.95)
+        ctx.move_to(wr_x - 26, wr_y - 30)
+        ctx.show_text("TRUE WIND")
 
         # Wind Rose Compass Ring
         ctx.set_source_rgba(0.3, 0.5, 0.7, 0.4)
-        ctx.arc(wr_x, wr_y, wr_rad, 0, 2 * math.pi)
+        ctx.set_line_width(1.0)
+        ctx.arc(wr_x, wr_y + 4, wr_rad - 10, 0, 2 * math.pi)
         ctx.stroke()
 
         # Cardinal markers
-        ctx.set_font_size(10)
+        ctx.set_font_size(8)
         ctx.set_source_rgba(0.6, 0.8, 1.0, 0.9)
-        ctx.move_to(wr_x - 4, wr_y - wr_rad + 11)
+        ctx.move_to(wr_x - 3, wr_y + 4 - (wr_rad - 10) + 8)
         ctx.show_text("N")
-        ctx.move_to(wr_x + wr_rad - 12, wr_y + 4)
+        ctx.move_to(wr_x + (wr_rad - 10) - 8, wr_y + 7)
         ctx.show_text("E")
-        ctx.move_to(wr_x - 4, wr_y + wr_rad - 3)
+        ctx.move_to(wr_x - 3, wr_y + 4 + (wr_rad - 10) - 2)
         ctx.show_text("S")
-        ctx.move_to(wr_x - wr_rad + 3, wr_y + 4)
+        ctx.move_to(wr_x - (wr_rad - 10) + 2, wr_y + 7)
         ctx.show_text("W")
 
-        # Wind Direction Arrow (Pointing in direction wind is blowing TO)
+        # Cyan Wind Direction Arrow (Points in direction wind is blowing TO)
         w_rad = math.radians(current_wind_dir)
+        w_center_y = wr_y + 4
         w_tip_x = wr_x + (wr_rad - 12) * math.sin(w_rad)
-        w_tip_y = wr_y - (wr_rad - 12) * math.cos(w_rad)
+        w_tip_y = w_center_y - (wr_rad - 12) * math.cos(w_rad)
         w_base_x = wr_x - (wr_rad - 18) * math.sin(w_rad)
-        w_base_y = wr_y + (wr_rad - 18) * math.cos(w_rad)
+        w_base_y = w_center_y + (wr_rad - 18) * math.cos(w_rad)
 
-        ctx.set_source_rgba(0.0, 0.9, 1.0, 0.9)
-        ctx.set_line_width(3.0)
+        ctx.set_source_rgba(0.0, 0.9, 1.0, 0.95)
+        ctx.set_line_width(2.5)
         ctx.move_to(w_base_x, w_base_y)
         ctx.line_to(w_tip_x, w_tip_y)
         ctx.stroke()
 
         # Arrow head
-        arr_size = 8.0
-        ctx.set_source_rgba(0.0, 0.9, 1.0, 0.9)
+        arr_size = 7.0
         ctx.move_to(w_tip_x, w_tip_y)
         ctx.line_to(w_tip_x - arr_size * math.sin(w_rad - 0.5), w_tip_y + arr_size * math.cos(w_rad - 0.5))
         ctx.line_to(w_tip_x - arr_size * math.sin(w_rad + 0.5), w_tip_y + arr_size * math.cos(w_rad + 0.5))
         ctx.close_path()
         ctx.fill()
 
-        # Wind Speed in center of rose
-        ctx.set_font_size(10)
+        # Wind Speed and Angle Subtitle
+        ctx.set_font_size(9)
         ctx.set_source_rgb(1.0, 1.0, 1.0)
-        ws_label = f"{current_wind_speed:.0f}k" if current_wind_speed is not None else ""
-        ctx.move_to(wr_x - 8, wr_y + 4)
-        ctx.show_text(ws_label)
+        card = wind_direction_cardinal(current_wind_dir)
+        spd_str = f"{current_wind_speed:.0f}kn" if current_wind_speed is not None else ""
+        txt = f"{spd_str} {card}"
+        ctx.move_to(wr_x - 18, wr_y + 36)
+        ctx.show_text(txt)
 
     # 11. Bottom Timestamp Footer
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
