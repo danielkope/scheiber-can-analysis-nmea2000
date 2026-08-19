@@ -733,14 +733,14 @@ class Bridge:
             processname=os.path.abspath(__file__),
             processversion=BRIDGE_VERSION,
             connection="Scheiber CAN on {}".format(CAN_IF),
-            deviceinstance=280,
+            deviceinstance=270,
             productid=PRODUCT_ID,
             productname="MasterVolt 2000W Inverter",
             firmwareversion=BRIDGE_VERSION,
             hardwareversion=None,
             connected=1,
         )
-        svc.add_path("/CustomName", "MasterVolt 2000W (House)")
+        svc.add_path("/CustomName", "MasterVolt 2000W")
         svc.add_path("/State", 0)
         svc.add_path("/Mode", 4)
         svc.add_path(

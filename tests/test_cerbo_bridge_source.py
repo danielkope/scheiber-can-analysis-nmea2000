@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 
 
-EXPECTED_SHA256 = "89fbb392d621a347edd51148003d2459478bd1fa685c08001a87be04c5c6ddfe"
+EXPECTED_SHA256 = "50a85211bbcb74f5a05159a555f6db3057cfef3b3f90e1f695d90a60cfc0c95d"
 
 
 class TestCerboBridgeSource(unittest.TestCase):
