@@ -203,22 +203,29 @@ class AnchorWatchService:
             return
 
         import dbus
-        # 1. GPS
+        # 1. GPS from D-Bus
+        best_sats = -1
         for s in self.bus.list_names():
             if s.startswith("com.victronenergy.gps"):
                 try:
                     obj = self.bus.get_object(s, "/")
                     val = obj.GetValue(dbus_interface="com.victronenergy.BusItem")
-                    pos = val.get("Position", {})
-                    if "Latitude" in pos and "Longitude" in pos:
-                        self.current_lat = float(pos["Latitude"])
-                        self.current_lon = float(pos["Longitude"])
-                    if "Speed" in val:
-                        self.current_sog = float(val["Speed"]) * 1.94384  # m/s to knots
-                    if "Course" in val and self.current_heading == 0.0:
-                        self.current_heading = float(val["Course"])
-                except Exception:
-                    pass
+                    if isinstance(val, dict):
+                        lat = val.get("Position/Latitude") or val.get("Position", {}).get("Latitude")
+                        lon = val.get("Position/Longitude") or val.get("Position", {}).get("Longitude")
+                        fix = val.get("Fix", 1)
+                        sats = int(val.get("NrOfSatellites", 0))
+
+                        if lat is not None and lon is not None and int(fix) > 0 and sats >= best_sats:
+                            self.current_lat = float(lat)
+                            self.current_lon = float(lon)
+                            best_sats = sats
+                            if "Speed" in val and val["Speed"] is not None:
+                                self.current_sog = float(val["Speed"]) * 1.94384  # m/s to knots
+                            if "Course" in val and val["Course"] is not None:
+                                self.current_heading = float(val["Course"])
+                except Exception as e:
+                    log.debug(f"Error polling GPS service {s}: {e}")
 
         # 2. Battery SoC
         try:
