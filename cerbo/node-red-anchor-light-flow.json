@@ -19,7 +19,11 @@
     "pathObj": {
       "path": "/SwitchableOutput/anchor_light/Auto",
       "type": "enum",
-      "name": "Anchor Light auto mode"
+      "name": "Anchor Light auto mode",
+      "enum": {
+        "0": "Manual",
+        "1": "Auto"
+      }
     },
     "initial": "",
     "name": "Anchor Light Auto Mode",
@@ -72,7 +76,11 @@
     "pathObj": {
       "path": "/SwitchableOutput/anchor_light/State",
       "type": "enum",
-      "name": "Anchor Light state"
+      "name": "Anchor Light state",
+      "enum": {
+        "0": "Off",
+        "1": "On"
+      }
     },
     "initial": "",
     "name": "Anchor Light State",
