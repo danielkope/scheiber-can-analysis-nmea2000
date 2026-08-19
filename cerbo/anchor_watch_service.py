@@ -733,6 +733,13 @@ class AnchorWatchService:
         self.last_alarm_time = -1000.0
         self.silenced_until = 0.0
         
+        # Alarm cooldowns & baseline states
+        self.baseline_wind_dir = None
+        self.last_squall_alarm_time = -1000.0
+        self.last_wind_shift_alarm_time = -1000.0
+        self.last_depth_alarm_time = -1000.0
+        self.last_battery_alarm_time = -1000.0
+
         # History Buffers (up to 3000 points = ~8-24h)
         self.track_points = []
         self.wind_history = []
@@ -881,13 +888,14 @@ class AnchorWatchService:
         self.armed = True
         self.set_time = datetime.now(timezone.utc)
         self.silenced_until = 0.0
+        self.baseline_wind_dir = self.current_wind_dir
         self.track_points = []
         self.wind_history = []
         if self.current_lat and self.current_lon:
             self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
         if self.current_wind_speed is not None and self.current_wind_dir is not None:
             self.wind_history.append({"tws": self.current_wind_speed, "twd": self.current_wind_dir, "time": time.time()})
-        log.info(f"Anchor Armed: Point ({self.anchor_lat:.5f}, {self.anchor_lon:.5f}), Rode: {self.rode_m}m, Radius: {self.alarm_radius_m}m")
+        log.info(f"Anchor Armed: Point ({self.anchor_lat:.5f}, {self.anchor_lon:.5f}), Rode: {self.rode_m}m, Radius: {self.alarm_radius_m}m, BaseWind: {self.baseline_wind_dir}°")
 
     def reset_to_heading(self, distance_m=None, radius_m=None):
         self.poll_sensors()
@@ -911,7 +919,7 @@ class AnchorWatchService:
 
         now = time.monotonic()
 
-        # Record breadcrumbs & wind sample every 10s
+        # 1. Record breadcrumbs & wind sample every 10s
         if now - self.last_track_record_time >= 10.0:
             record = True
             if self.track_points:
@@ -923,18 +931,50 @@ class AnchorWatchService:
                 self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
                 if self.current_wind_speed is not None and self.current_wind_dir is not None:
                     self.wind_history.append({"tws": self.current_wind_speed, "twd": self.current_wind_dir, "time": time.time()})
+                    if self.baseline_wind_dir is None:
+                        self.baseline_wind_dir = self.current_wind_dir
                 if len(self.track_points) > 3000:
                     self.track_points.pop(0)
                 if len(self.wind_history) > 3000:
                     self.wind_history.pop(0)
                 self.last_track_record_time = now
 
+        # 2. Anchor Drag Alarm (Geofence Breach)
         dist_m = haversine_distance_m(self.current_lat, self.current_lon, self.anchor_lat, self.anchor_lon)
-
         if dist_m > self.alarm_radius_m:
             if now > self.silenced_until and (now - self.last_alarm_time >= 30.0):
                 self.last_alarm_time = now
                 self.trigger_alarm(dist_m)
+
+        # 3. Squall / High Wind Warning
+        gust_thresh = float(self.config.get("wind_squall_gust_kn", 25.0))
+        if self.current_wind_speed is not None and self.current_wind_speed >= gust_thresh:
+            if now > self.silenced_until and (now - self.last_squall_alarm_time >= 600.0):
+                self.last_squall_alarm_time = now
+                self.trigger_squall_alarm(self.current_wind_speed, self.current_wind_dir, gust_thresh)
+
+        # 4. Wind Shift Warning
+        shift_thresh = float(self.config.get("wind_shift_threshold_deg", 60.0))
+        if self.baseline_wind_dir is not None and self.current_wind_dir is not None:
+            shift_diff = abs((self.current_wind_dir - self.baseline_wind_dir + 180.0) % 360.0 - 180.0)
+            if shift_diff >= shift_thresh:
+                if now > self.silenced_until and (now - self.last_wind_shift_alarm_time >= 900.0):
+                    self.last_wind_shift_alarm_time = now
+                    self.trigger_wind_shift_alarm(shift_diff, self.baseline_wind_dir, self.current_wind_dir, shift_thresh)
+
+        # 5. Shallow Water / Depth Drop Warning
+        depth_thresh = float(self.config.get("depth_alarm_threshold_m", 2.5))
+        if self.current_depth is not None and self.current_depth <= depth_thresh:
+            if now > self.silenced_until and (now - self.last_depth_alarm_time >= 300.0):
+                self.last_depth_alarm_time = now
+                self.trigger_depth_alarm(self.current_depth, depth_thresh)
+
+        # 6. Low Battery Warning
+        bat_thresh = float(self.config.get("battery_low_soc_pct", 20.0))
+        if self.current_soc is not None and self.current_soc <= bat_thresh:
+            if now > self.silenced_until and (now - self.last_battery_alarm_time >= 1800.0):
+                self.last_battery_alarm_time = now
+                self.trigger_battery_alarm(self.current_soc, bat_thresh)
 
     def trigger_alarm(self, dist_m):
         log.warning(f"🚨 ANCHOR DRAG DETECTED: Distance {dist_m:.1f}m exceeds limit {self.alarm_radius_m:.1f}m!")
@@ -951,9 +991,10 @@ class AnchorWatchService:
             f"💨 <b>Wind:</b> {self.current_wind_speed or 0:.1f} kn {card} ({self.current_wind_dir or 0:.0f}°)\n"
             f"🌊 <b>Depth:</b> {self.current_depth or 0:.1f} m\n"
             f"⚡ <b>SOG / Heading:</b> {self.current_sog:.1f} kn / {self.current_heading:.0f}°\n"
-            f"📍 <b>Position:</b> {self.current_lat:.5f}°, {self.current_lon:.5f}°\n"
+            f"📍 <b>Position:</b> <code>{self.current_lat:.5f}°, {self.current_lon:.5f}°</code>\n"
             f"🔋 <b>SoC:</b> {self.current_soc or 0:.0f}%\n\n"
-            f"<a href='{map_url}'>🗺️ View Vessel on Live Map</a>"
+            f"📍 <a href='{map_url}'><b>Open Live Position in Google Maps</b></a>\n"
+            f"🔗 {map_url}"
         )
         markup = {
             "inline_keyboard": [
@@ -962,7 +1003,10 @@ class AnchorWatchService:
                     {"text": "🔄 Reset to Heading", "callback_data": "reset_heading"}
                 ],
                 [
-                    {"text": "🔕 Silence 15m", "callback_data": "silence_15"},
+                    {"text": "📍 Open Google Maps", "url": map_url},
+                    {"text": "🔕 Silence 15m", "callback_data": "silence_15"}
+                ],
+                [
                     {"text": "❌ Disarm Watch", "callback_data": "disarm"}
                 ]
             ]
@@ -973,6 +1017,66 @@ class AnchorWatchService:
             self.tg.send_photo(png, caption=msg, reply_markup=markup)
         else:
             self.tg.send_message(msg, reply_markup=markup)
+
+    def trigger_squall_alarm(self, wind_speed, wind_dir, threshold):
+        log.warning(f"💨 SQUALL WARNING: Wind speed {wind_speed:.1f} kn exceeds threshold {threshold:.1f} kn!")
+        card = wind_direction_cardinal(wind_dir)
+        map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
+        msg = (
+            f"💨 <b>SQUALL / HIGH WIND WARNING!</b>\n\n"
+            f"⚠️ <b>Wind Speed:</b> <b>{wind_speed:.1f} kn</b> (Threshold: {threshold:.0f} kn)\n"
+            f"🧭 <b>Direction:</b> FROM {card} ({wind_dir or 0:.0f}°)\n"
+            f"🌊 <b>Depth:</b> {self.current_depth or 0:.1f} m\n"
+            f"⚡ <b>SOG:</b> {self.current_sog:.1f} kn\n"
+            f"🔋 <b>Battery:</b> {self.current_soc or 0:.0f}% SoC\n\n"
+            f"📍 <a href='{map_url}'>Open Google Maps</a>"
+        )
+        png = self.render_map()
+        if png:
+            self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu())
+        else:
+            self.tg.send_message(msg, reply_markup=self.build_quick_menu())
+
+    def trigger_wind_shift_alarm(self, shift_deg, base_dir, cur_dir, threshold):
+        log.warning(f"🔄 WIND SHIFT WARNING: Wind shifted {shift_deg:.0f}° from {base_dir:.0f}° to {cur_dir:.0f}°!")
+        base_card = wind_direction_cardinal(base_dir)
+        cur_card = wind_direction_cardinal(cur_dir)
+        map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
+        msg = (
+            f"🔄 <b>WIND SHIFT WARNING!</b>\n\n"
+            f"⚠️ <b>Shift Angle:</b> <b>{shift_deg:.0f}°</b> (Threshold: {threshold:.0f}°)\n"
+            f"🧭 <b>Origin:</b> Shifted from {base_card} ({base_dir:.0f}°) ➔ <b>{cur_card} ({cur_dir:.0f}°)</b>\n"
+            f"💨 <b>Speed:</b> {self.current_wind_speed or 0:.1f} kn\n"
+            f"🌊 <b>Depth:</b> {self.current_depth or 0:.1f} m\n\n"
+            f"<i>Check lee shore proximity, swing clearance, and swell.</i>\n"
+            f"📍 <a href='{map_url}'>Open Google Maps</a>"
+        )
+        png = self.render_map()
+        if png:
+            self.tg.send_photo(png, caption=msg, reply_markup=self.build_quick_menu())
+        else:
+            self.tg.send_message(msg, reply_markup=self.build_quick_menu())
+
+    def trigger_depth_alarm(self, depth_m, threshold):
+        log.warning(f"🌊 SHALLOW WATER ALARM: Depth {depth_m:.2f}m is below threshold {threshold:.1f}m!")
+        map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
+        msg = (
+            f"🌊 <b>SHALLOW WATER WARNING!</b>\n\n"
+            f"⚠️ <b>Water Depth:</b> <b>{depth_m:.2f} m</b> (Threshold: {threshold:.1f} m)\n"
+            f"💨 <b>Wind:</b> {self.current_wind_speed or 0:.1f} kn\n"
+            f"📍 <b>Position:</b> <code>{self.current_lat or 0:.5f}°, {self.current_lon or 0:.5f}°</code>\n\n"
+            f"📍 <a href='{map_url}'>Open Google Maps</a>"
+        )
+        self.tg.send_message(msg, reply_markup=self.build_quick_menu())
+
+    def trigger_battery_alarm(self, soc_pct, threshold):
+        log.warning(f"🔋 LOW BATTERY WARNING: House battery SoC {soc_pct:.0f}% is below {threshold:.0f}%!")
+        msg = (
+            f"🔋 <b>LOW BATTERY WARNING!</b>\n\n"
+            f"⚠️ <b>House Battery:</b> <b>{soc_pct:.0f}% SoC</b> (Threshold: {threshold:.0f}%)\n"
+            f"💡 <i>Consider running engine/generator or reducing DC loads.</i>"
+        )
+        self.tg.send_message(msg, reply_markup=self.build_quick_menu())
 
     def get_scheiber_switch(self, channel=None):
         if not self.bus:

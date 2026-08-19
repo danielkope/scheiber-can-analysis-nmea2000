@@ -144,3 +144,68 @@ def test_drop_current_projects_ahead():
     assert svc.anchor_lat > 43.5000 # North of boat
     dist = aws.haversine_distance_m(43.5000, 16.2000, svc.anchor_lat, svc.anchor_lon)
     assert dist == pytest.approx(50.0, abs=0.5)
+
+
+def test_squall_alarm_trigger():
+    svc = aws.AnchorWatchService(config_path="/tmp/nonexistent_config.json")
+    svc.arm_anchor_point(43.5000, 16.2000, rode_m=50.0, radius_m=60.0)
+    svc.current_lat = 43.5000
+    svc.current_lon = 16.2000
+
+    squall_events = []
+    svc.trigger_squall_alarm = lambda spd, d, th: squall_events.append((spd, d, th))
+
+    # Wind below threshold (18 kn)
+    svc.current_wind_speed = 18.0
+    svc.current_wind_dir = 280.0
+    svc.check_geofence()
+    assert len(squall_events) == 0
+
+    # Squall gust (28 kn)
+    svc.current_wind_speed = 28.0
+    svc.check_geofence()
+    assert len(squall_events) == 1
+    assert squall_events[0][0] == 28.0
+
+
+def test_wind_shift_alarm_trigger():
+    svc = aws.AnchorWatchService(config_path="/tmp/nonexistent_config.json")
+    svc.current_wind_dir = 200.0
+    svc.arm_anchor_point(43.5000, 16.2000, rode_m=50.0, radius_m=60.0)
+    svc.current_lat = 43.5000
+    svc.current_lon = 16.2000
+
+    shift_events = []
+    svc.trigger_wind_shift_alarm = lambda diff, b, c, th: shift_events.append((diff, b, c, th))
+
+    # Small shift (+20 deg)
+    svc.current_wind_dir = 220.0
+    svc.check_geofence()
+    assert len(shift_events) == 0
+
+    # Major shift (+70 deg from 200 to 270)
+    svc.current_wind_dir = 270.0
+    svc.check_geofence()
+    assert len(shift_events) == 1
+    assert shift_events[0][0] == pytest.approx(70.0)
+
+
+def test_depth_alarm_trigger():
+    svc = aws.AnchorWatchService(config_path="/tmp/nonexistent_config.json")
+    svc.arm_anchor_point(43.5000, 16.2000, rode_m=50.0, radius_m=60.0)
+    svc.current_lat = 43.5000
+    svc.current_lon = 16.2000
+
+    depth_events = []
+    svc.trigger_depth_alarm = lambda d, th: depth_events.append((d, th))
+
+    # Safe depth (6.0m)
+    svc.current_depth = 6.0
+    svc.check_geofence()
+    assert len(depth_events) == 0
+
+    # Shallow depth (2.1m)
+    svc.current_depth = 2.1
+    svc.check_geofence()
+    assert len(depth_events) == 1
+    assert depth_events[0][0] == 2.1
