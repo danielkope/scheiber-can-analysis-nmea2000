@@ -366,13 +366,51 @@ python3 /tmp/monitor_n2k.py
 Expected output:
 * `PGN 127505` (Fluid Level): Fresh Water (Inst 0, 600L), Diesel 1 (Inst 0, 500L), Diesel 2 (Inst 1, 500L)
 * `PGN 127508` (Battery Status): Port (Inst 0), Starboard (Inst 1), Generator (Inst 2)
-* `PGN 127501` (Binary Switch Bank): Bank 0 (15 Channels)
+* `PGN 127501` (Binary Switch Bank): Bank 1 (15 Channels - Scheiber Multibloc V8)
 
 #### Step 5: Refresh Chartplotter Data Sources (B&G Zeus3)
 On the B&G Zeus3 screen:
 1. Navigate to **Settings &rarr; Network &rarr; Sources**.
 2. Tap **Auto Select** to re-bind to the newly claimed N2K dynamic source addresses.
-3. Under **Fuel** and **Fresh Water**, ensure Tank 1, Tank 2, and Water are assigned to the Cerbo GX.
+3. Under **Fuel** and **Fresh Water**, confirm Port Fuel (Inst 0), Starboard Fuel (Inst 1), and Fresh Water (Inst 0) are acquired.
+
+---
+
+## Digital Switching & CZone Integration Architecture (B&G Zeus3 / Zeus3S)
+
+### 1. The Subsystem Relationship
+On Navico MFDs (B&G Zeus3, Zeus3S, Simrad NSS evo3), the **"Digital Switching"** interface is built directly on top of the **CZone** switching engine. When the Zeus3 prompts for an active switching configuration under **Settings &rarr; Advanced &rarr; Features &rarr; Switching**, it expects a `.zcf` (CZone Configuration File).
+
+### 2. Supported Control Modes on the Zeus3
+
+| Method | Transport | Configuration Required | Description |
+|---|:---:|:---:|---|
+| **A. Native Instrument Tiles** | NMEA 2000 (`can1`) | **Zero** | Add individual toggle switches or indicators to any chart/gauge page via **Menu &rarr; Edit Layout &rarr; Add Tile &rarr; Electrical &rarr; Switch Bank 1**. |
+| **B. CZone Control Bar / Tab** | NMEA 2000 (`can1`) | `Scheiber_Zeus.zcf` on Micro-SD | Generates Navico's dedicated graphical switching tab with icons, group pages (*Lighting*, *Pumps*, *Domestic*), and mode presets. |
+| **C. Victron Marine MFD App** | Hardwired Ethernet (`eth0`) | `Services/MqttLocal = 1` | Automatically renders the full-screen Victron MFD app on the Zeus3 carousel with all 15 switch cards, tanks, generator start/stop, and SmartShunt SoC. |
+
+### 3. CZone COI Circuit Mapping Table (for `.zcf` Generation)
+To generate the `Scheiber_Zeus.zcf` file using the free **CZone Configuration Tool** (v2.x):
+* **Module**: Combination Output Interface (COI) or Output Interface (OI)
+* **Dipswitch**: `00000001` (Address `1` / Bank `1`)
+
+| Circuit # | Channel Name | Recommended Icon | Control Type | Scheiber Relays |
+|:---:|---|---|---|---|
+| **1** | Anchor Light | Anchor / 360° Light | Toggle On/Off | Channel 0 |
+| **2** | Navigation Lights | Port/Stbd Bow Lights | Toggle On/Off | Channel 1 |
+| **3** | Steaming Light | Mast Light | Toggle On/Off | Channel 2 |
+| **4** | Deck Flood Lights | Floodlight | Toggle On/Off | Channel 3 |
+| **5** | Cockpit Lights | Cockpit / Exterior | Toggle On/Off | Channel 4 |
+| **6** | Saloon Lights | Ceiling Light | Toggle On/Off | Channel 5 |
+| **7** | Cabin Lights | Bed / Interior Light | Toggle On/Off | Channel 6 |
+| **8** | Fresh Water Pump | Water Faucet / Pump | Toggle On/Off | Channel 7 |
+| **9** | Refrigeration | Snowflake / Fridge | Toggle On/Off | Channel 8 |
+| **10** | 12V Domestic Sockets | Power Plug | Toggle On/Off | Channel 9 |
+| **11** | Port Bilge Pump | Bilge Pump | Toggle On/Off | Channel 10 |
+| **12** | Starboard Bilge Pump | Bilge Pump | Toggle On/Off | Channel 11 |
+| **13** | Engine Room Light | Lightbulb | Toggle On/Off | Channel 12 |
+| **14** | Auxiliary 1 | Generic Switch | Toggle On/Off | Channel 13 |
+| **15** | Auxiliary 2 | Generic Switch | Toggle On/Off | Channel 14 |
 
 A Signal K server restart is normally unnecessary when the REST tree is updating and PGN 127505 loopback is fresh.
 
