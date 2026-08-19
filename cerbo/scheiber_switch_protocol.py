@@ -178,20 +178,21 @@ def bilge_target_bits(mode: str) -> Tuple[bool, bool]:
 
 
 def bilge_mode_to_dbus(mode: str, running: bool = False) -> Tuple[int, int]:
-    """Return native three-state values as (State, Auto).
+    """Return native three-state values as ``(State, Auto)``.
 
-    ``Auto`` represents the selected Scheiber AUTO mode. ``State`` is the
-    physical pump-activity lamp: it is set while the pump is actually running,
-    including during an automatic float-triggered cycle. MANUAL is therefore
-    represented by State=1, Auto=0; AUTO while idle is State=0, Auto=1; and AUTO
-    while pumping is State=1, Auto=1.
+    ``Auto`` represents the selected Scheiber AUTO mode. ``State`` doubles as
+    the physical ON/activity lamp: AUTO while idle is ``State=0, Auto=1``;
+    AUTO while pumping is ``State=1, Auto=1``; and MANUAL is always
+    ``State=1, Auto=0`` because manual mode commands continuous pumping.
+    An unexpected running signal while OFF is still displayed as active and is
+    separately marked as a fault by the runtime.
     """
     if mode == MODE_OFF:
         return int(bool(running)), 0
     if mode == MODE_AUTO:
         return int(bool(running)), 1
     if mode == MODE_MANUAL:
-        return int(bool(running)), 0
+        return 1, 0
     raise ValueError(f"cannot publish bilge mode {mode}")
 
 
