@@ -18,12 +18,13 @@ Design rules:
   * No automatic START/STOP retries are sent.
   * SocketCAN kernel filters allow only generator/battery telemetry IDs.
   * Generator telemetry: frequency, gated AC voltage, starter voltage.
-  * Battery telemetry: six house-bank IBS channels plus two experimental
-    engine-battery voltage channels and the generator starter battery.
+  * Battery telemetry: six house-bank IBS channels plus confirmed
+    Starboard and Port engine-battery voltage channels (60A charger B1/B3)
+    and the generator starter battery (25A charger).
   * House-bank voltage and SoC decodes are confirmed for this installation.
     House-bank current sign/offset are strong; the x0.1 A scale remains a candidate.
-  * Engine Battery A/B voltage scale is intentionally EXPERIMENTAL and easy
-    to change after physical validation.
+  * Engine starter battery voltages (Starboard 12.6V, Port 12.8V) are confirmed
+    via the 60A multi-output charger telemetry (0x00501008 / 0x00561008 x 0.1V).
   * Tank telemetry: fresh water, diesel tank 1, diesel tank 2 from
     confirmed Scheiber frame 0x02040580.
   * Startup resynchronization detects a generator that was already running
@@ -43,9 +44,27 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import sys
 import time
 from datetime import datetime
+from decimal import Decimal
+
+import dbus
+import dbus.mainloop.glib
+import dbus.service
+from gi.repository import GLib
+
+# Explicit relative import prevents picking up any older, flat /data copy.
+from vedbus import VeDbusService
+
+CAN_IF = os.environ.get("CAN_IF", "can2")
+
+SERVICE_NAME = "com.victronenergy.genset.scheiber"
+DEVICE_INSTANCE = 40
+PRODUCT_ID = 0xFFFF
+PRODUCT_NAME = "Scheiber Generator"
+BRIDGE_VERSION = "5.5.0"
 
 # ---------------------------------------------------------------------------
 # Find Victron velib_python
@@ -143,15 +162,13 @@ HOUSE_CURRENT_ZERO = 0x4E00
 HOUSE_CURRENT_SCALE = 0.1
 HOUSE_VOLTAGE_SCALE = 0.01
 
-# Provisional engine-battery voltage channels.  The source IDs and scale are
-# deliberately experimental.  With the captured raw values (~0x644A/0x6448),
-# 0.00053 V/count yields ~13.61 V, which is electrically plausible for AGM
-# starter batteries.  Change this constant after the one-engine-at-a-time test.
-ENGINE_BATTERY_IDS = (
-    0x06140580,  # Engine Battery A (experimental)
-    0x06180580,  # Engine Battery B (experimental)
-)
-ENGINE_VOLTAGE_SCALE = 0.00053
+# 60A Multi-Output Charger Telemetry (Starboard starter B1, House B2, Port starter B3)
+# bytes 0..1: uint16 LE x 0.1 V -> B1: Starboard Engine Starter
+CHARGER_60A_TELEMETRY_ID = 0x00501008
+# bytes 0..1: uint16 LE x 0.1 V -> B2: House Bank (on 60A charger)
+# bytes 2..3: uint16 LE x 0.1 V -> B3: Port Engine Starter
+CHARGER_60A_DYNAMIC_ID = 0x00561008
+CHARGER_60A_VOLTAGE_SCALE = 0.1
 
 # Confirmed tank-level frame.
 #   bytes 0..1: fresh water level, uint16 BE x 1 %
@@ -278,16 +295,13 @@ BATTERY_DEFS = (
     ("house4", "scheiber_house4", 83, "Scheiber House Bank 4", 0x060E0580, "house"),
     ("house5", "scheiber_house5", 84, "Scheiber House Bank 5", 0x06120580, "house"),
     ("house6", "scheiber_house6", 85, "Scheiber House Bank 6", 0x06160580, "house"),
-    ("engine_a", "scheiber_engine_a", 86, "Engine Battery A (experimental)", 0x06140580, "engine"),
-    ("engine_b", "scheiber_engine_b", 87, "Engine Battery B (experimental)", 0x06180580, "engine"),
+    ("engine_starboard", "scheiber_engine_starboard", 86, "Starboard Engine Starter Battery", CHARGER_60A_TELEMETRY_ID, "engine_starboard"),
+    ("engine_port", "scheiber_engine_port", 87, "Port Engine Starter Battery", CHARGER_60A_DYNAMIC_ID, "engine_port"),
     ("generator", "scheiber_generator_starter", 88, "Generator Starter Battery", GEN_STARTER_ID, "generator"),
 )
 BATTERY_KEY_BY_CAN = {row[4]: row[0] for row in BATTERY_DEFS}
 HOUSE_KEY_BY_CAN = {
     row[4]: row[0] for row in BATTERY_DEFS if row[5] == "house"
-}
-ENGINE_KEY_BY_CAN = {
-    row[4]: row[0] for row in BATTERY_DEFS if row[5] == "engine"
 }
 CAN_FILTER_IDS = tuple(sorted(set(
     (
@@ -301,9 +315,10 @@ CAN_FILTER_IDS = tuple(sorted(set(
         HOUSE_PANEL_APPLIED_ID,
         AC_PANEL_TELEMETRY_ID,
         HOUSE_PANEL_TELEMETRY_ID,
+        CHARGER_60A_TELEMETRY_ID,
+        CHARGER_60A_DYNAMIC_ID,
     )
     + HOUSE_BATTERY_IDS
-    + ENGINE_BATTERY_IDS
 )))
 _UNSET = object()
 
@@ -739,11 +754,10 @@ class Bridge:
                     "I=(LE16-0x4E00)*0.1 candidate; "
                     "SoC=LE16% confirmed"
                 )
-            elif mode == "engine":
-                decode = (
-                    "EXPERIMENTAL V=LE16*{:.7f}; raw word exported"
-                    .format(ENGINE_VOLTAGE_SCALE)
-                )
+            elif mode == "engine_starboard":
+                decode = "V=LE16[0..1]*0.1 confirmed (60A charger B1 Starboard starter)"
+            elif mode == "engine_port":
+                decode = "V=LE16[2..3]*0.1 confirmed (60A charger B3 Port starter)"
             else:
                 decode = "V=LE16*0.1 generator-starter correlation"
 
@@ -2133,32 +2147,54 @@ class Bridge:
             return
 
         # --------------------------------------------------------------
-        # Experimental Engine Battery A/B voltage frames
+        # 60A Multi-Output Charger B1: Starboard Engine Starter Battery
         # --------------------------------------------------------------
-        if can_id in ENGINE_KEY_BY_CAN and len(data) >= 2:
-            key = ENGINE_KEY_BY_CAN[can_id]
+        if can_id == CHARGER_60A_TELEMETRY_ID and len(data) >= 2:
             raw0 = data[0] | (data[1] << 8)
             raw1 = (
                 data[2] | (data[3] << 8)
                 if len(data) >= 4
-                else 0
+                else None
             )
             raw2 = (
                 data[4] | (data[5] << 8)
                 if len(data) >= 6
-                else 0
+                else None
             )
 
-            # EXPERIMENTAL scale requested for initial field testing:
-            #   0x644A * 0.00053 = 13.607 V
-            #   0x6448 * 0.00053 = 13.606 V
-            voltage = raw0 * ENGINE_VOLTAGE_SCALE
-            voltage_out = round(voltage, 3) if 5.0 <= voltage <= 18.5 else None
+            voltage = raw0 * CHARGER_60A_VOLTAGE_SCALE
+            voltage_out = round(voltage, 2) if 5.0 <= voltage <= 18.5 else None
 
             self.update_battery_service(
-                key,
+                "engine_starboard",
                 voltage=voltage_out,
-                raw_words=[raw0, raw1, raw2],
+                raw_words=[raw0, raw1 or 0, raw2 or 0],
+            )
+            return
+
+        # --------------------------------------------------------------
+        # 60A Multi-Output Charger B3: Port Engine Starter Battery (& B2 House)
+        # --------------------------------------------------------------
+        if can_id == CHARGER_60A_DYNAMIC_ID and len(data) >= 4:
+            raw0 = data[0] | (data[1] << 8)  # House bank on charger (B2)
+            raw1 = data[2] | (data[3] << 8)  # Port starter voltage (B3)
+            raw2 = (
+                data[4] | (data[5] << 8)
+                if len(data) >= 6
+                else None
+            )
+
+            voltage_port = raw1 * CHARGER_60A_VOLTAGE_SCALE
+            voltage_port_out = (
+                round(voltage_port, 2)
+                if 5.0 <= voltage_port <= 18.5
+                else None
+            )
+
+            self.update_battery_service(
+                "engine_port",
+                voltage=voltage_port_out,
+                raw_words=[raw0, raw1, raw2 or 0],
             )
             return
 
