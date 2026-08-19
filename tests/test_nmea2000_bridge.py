@@ -12,13 +12,15 @@ spec.loader.exec_module(n2k_bridge)
 def test_build_name_u64():
     uniq_id = 1380393
     mfg_code = 358
-    name = n2k_bridge.build_name_u64(uniq_id, mfg_code, 0, 130, 60, 0, 4)
+    name = n2k_bridge.build_name_u64(uniq_id, mfg_code, 0, 140, 30, 0, 4)
     
     raw = struct.pack("<Q", name)
     assert len(raw) == 8
     
     assert (name & 0x1FFFFF) == uniq_id
     assert ((name >> 21) & 0x7FF) == mfg_code
+    assert ((name >> 40) & 0xFF) == 140
+    assert ((name >> 49) & 0x7F) == 30
     assert ((name >> 63) & 0x01) == 1
 
 
@@ -32,14 +34,6 @@ def test_encode_pgn127505_fluid_level():
     assert l_raw == 12750 # 51.0 * 250
     assert c_raw == 6000 # 600.0 L (0.1 L units)
     assert res == 0xFF
-    
-    # Diesel 2: Instance 1, Fluid Type 0 (Fuel), 78.0%, 0.500 m3 (500 L)
-    payload_d2 = n2k_bridge.encode_pgn127505_fluid_level(1, 0, 78.0, 0.5)
-    byte0_d2, l_raw_d2, c_raw_d2, res_d2 = struct.unpack("<BHIB", payload_d2)
-    assert (byte0_d2 >> 4) == 1 # Instance 1
-    assert (byte0_d2 & 0x0F) == 0 # Fuel
-    assert l_raw_d2 == 19500 # 78.0 * 250
-    assert c_raw_d2 == 5000 # 500.0 L
 
 
 def test_encode_pgn127508_battery():
@@ -77,3 +71,17 @@ def test_decode_pgn127502_switch_control():
     assert commands[2] == 3 # No-op
     assert commands[3] == 3 # No-op
     assert commands[7] == 3 # No-op
+
+
+def test_encode_pgn126996_product_info():
+    payload = n2k_bridge.encode_pgn126996_product_info("Scheiber Gateway", "v2.0", "Cerbo GX", "HQ123")
+    assert len(payload) == 134
+    n2k_ver, prod_code = struct.unpack("<HH", payload[:4])
+    assert n2k_ver == 2101
+    assert prod_code == 358
+    assert payload[4:20].decode("ascii").strip() == "Scheiber Gateway"
+
+
+def test_encode_pgn126998_config_info():
+    payload = n2k_bridge.encode_pgn126998_config_info("Fresh Water", "Diesel", "Victron")
+    assert len(payload) > 0

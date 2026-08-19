@@ -364,8 +364,14 @@ fi
 dbus -y com.victronenergy.settings /Settings/Vecan/can1/N2kGatewayEnabled SetValue 1 2>/dev/null || true
 dbus -y com.victronenergy.settings /Settings/Vecan/can0/N2kGatewayEnabled SetValue 0 2>/dev/null || true
 dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/90/Description2 SetValue 'Fresh Water' 2>/dev/null || true
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/90/FluidInstance0 SetValue 0 2>/dev/null || true
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/90/Instance SetValue 0 2>/dev/null || true
 dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/91/Description2 SetValue 'Port Diesel' 2>/dev/null || true
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/91/FluidInstance0 SetValue 0 2>/dev/null || true
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/91/Instance SetValue 0 2>/dev/null || true
 dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/92/Description2 SetValue 'Starboard Diesel' 2>/dev/null || true
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/92/FluidInstance0 SetValue 1 2>/dev/null || true
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/Forward/tank/92/Instance SetValue 1 2>/dev/null || true
 if [ -n "$SVC" ]; then
     "$SVC" -t /service/vecan-dbus.can1 2>/dev/null || true
     "$SVC" -t /service/vecan-dbus.can0 2>/dev/null || true

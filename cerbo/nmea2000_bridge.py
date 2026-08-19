@@ -5,6 +5,7 @@ Publishes:
   1. PGN 127505 (Fluid Level) for Fresh Water (Inst 0, Water), Diesel 1 (Inst 0, Fuel), Diesel 2 (Inst 1, Fuel).
   2. PGN 127508 (Battery Status) for Port Starter, Starboard Starter, and Generator Starter batteries.
   3. PGN 127501 (Binary Switch Bank Status) for all 15 Scheiber Multibloc V8 switch channels.
+  4. PGN 126996 (Product Information) & PGN 126998 (Configuration Information) on ISO Request.
 Consumes:
   1. PGN 127502 (Binary Switch Bank Control) from B&G Zeus3 chartplotter and updates D-Bus switch states.
 """
@@ -19,8 +20,8 @@ N2K_IF = os.environ.get("N2K_IF", "can1")
 PREFERRED_ADDR = 105
 DEVICE_UNIQUE_ID = 1380393
 MANUFACTURER_CODE = 358  # Victron Energy
-DEVICE_FUNCTION = 130    # Multifunction / Display
-DEVICE_CLASS = 60        # Electrical Distribution
+DEVICE_FUNCTION = 140    # Binary Event Monitor / Load Controller / Digital Switching
+DEVICE_CLASS = 30        # Electrical Distribution
 SYSTEM_INSTANCE = 0
 INDUSTRY_GROUP = 4       # Marine
 
@@ -29,8 +30,8 @@ INDUSTRY_GROUP = 4       # Marine
 # Fluid types: 0 = Fuel/Diesel, 1 = Fresh Water, 2 = Waste Water, 5 = Black Water
 TANK_PGN_DEFS = [
     (0, 1, "com.victronenergy.tank.scheiber_fresh", "Fresh Water Tank"),
-    (0, 0, "com.victronenergy.tank.scheiber_diesel1", "Diesel Tank 1 (Port)"),
-    (1, 0, "com.victronenergy.tank.scheiber_diesel2", "Diesel Tank 2 (Starboard)"),
+    (0, 0, "com.victronenergy.tank.scheiber_diesel1", "Port Diesel Tank"),
+    (1, 0, "com.victronenergy.tank.scheiber_diesel2", "Starboard Diesel Tank"),
 ]
 
 # Battery definitions to publish as PGN 127508 (Battery Status)
@@ -77,7 +78,7 @@ def encode_pgn127505_fluid_level(fluid_inst, fluid_type, level_pct, capacity_m3=
     else:
         c_raw = 0xFFFFFFFF
         
-    return struct.pack("<BHI B", byte0, l_raw, c_raw, 0xFF)
+    return struct.pack("<BHIB", byte0, l_raw, c_raw, 0xFF)
 
 
 def encode_pgn127508_battery(inst, voltage_v, seq_id=0):
@@ -121,6 +122,33 @@ def decode_pgn127502_switch_control(payload):
     return bank_inst, commands
 
 
+def encode_pgn126996_product_info(model_id="Scheiber Gateway", sw_ver="v2.0", model_ver="Cerbo GX", serial="HQ23013MZC2"):
+    """Encode PGN 126996 Product Information (134 bytes)."""
+    n2k_ver = 2101
+    prod_code = 358
+    
+    def pad_str(s, n):
+        b = s.encode("ascii", errors="replace")[:n]
+        return b.ljust(n, b'\x20')
+        
+    payload = struct.pack("<HH", n2k_ver, prod_code)
+    payload += pad_str(model_id, 32)
+    payload += pad_str(sw_ver, 32)
+    payload += pad_str(model_ver, 32)
+    payload += pad_str(serial, 32)
+    payload += bytes([1, 1])  # Cert level = 1, Load Equivalence = 1 LEN
+    return payload
+
+
+def encode_pgn126998_config_info(desc1="Fresh Water & Port/Stbd Fuel", desc2="Starter Batteries & 15-Ch Switches", mfg_info="Victron / Scheiber Gateway"):
+    """Encode PGN 126998 Configuration Information (variable length)."""
+    def encode_str_field(s):
+        b = s.encode("utf-8", errors="replace")
+        return bytes([len(b) + 2, 0x01]) + b
+        
+    return encode_str_field(desc1) + encode_str_field(desc2) + encode_str_field(mfg_info)
+
+
 class Nmea2000Bridge:
     def __init__(self, interface=N2K_IF):
         for p in (
@@ -161,6 +189,7 @@ class Nmea2000Bridge:
         self.last_battery_pub = 0.0
         self.last_switch_pub = 0.0
         self.seq_id = 0
+        self.fast_seq = 0
         
         self.init_socket()
         self.claim_address(verbose=True)
@@ -187,6 +216,28 @@ class Nmea2000Bridge:
             self.sock.send(frame)
         except Exception as e:
             print(f"[N2K Bridge] Error sending CAN frame 0x{can_id:08X}: {e}", flush=True)
+
+    def send_fast_packet(self, pgn, payload_bytes, priority=6):
+        """Transmit Fast-Packet NMEA 2000 multi-frame PGN."""
+        can_id_base = (priority << 26) | (pgn << 8) | self.addr
+        total_len = len(payload_bytes)
+        fast_seq_bits = (self.fast_seq & 0x07) << 5
+        self.fast_seq = (self.fast_seq + 1) & 0x07
+        
+        # Frame 0: [seq | 0, total_len, byte0..byte5]
+        first_chunk = payload_bytes[:6]
+        f0 = bytes([fast_seq_bits | 0x00, total_len]) + first_chunk
+        self.send_can_frame(can_id_base, f0)
+        
+        # Subsequent frames: [seq | frame_idx, byteN..byteN+6]
+        offset = 6
+        frame_idx = 1
+        while offset < total_len:
+            chunk = payload_bytes[offset:offset+7]
+            fN = bytes([fast_seq_bits | (frame_idx & 0x1F)]) + chunk
+            self.send_can_frame(can_id_base, fN)
+            offset += len(chunk)
+            frame_idx += 1
 
     def claim_address(self, verbose=False):
         # PGN 60928 (0xEE00): Priority 6, Broadcast -> 0x18EEFFxx
@@ -271,7 +322,8 @@ class Nmea2000Bridge:
     def publish_switch_bank_status(self):
         """Publish PGN 127501 (Binary Switch Bank Status) for Bank 0."""
         payload = encode_pgn127501_switch_bank(self.switch_states, 0)
-        can_id = (6 << 26) | (0x1F20D << 8) | self.addr
+        # Standard N2K priority for PGN 127501 is 3 (0x0DF20Dxx)
+        can_id = (3 << 26) | (0x1F20D << 8) | self.addr
         self.send_can_frame(can_id, payload)
 
     def handle_switch_bank_control(self, payload):
@@ -317,6 +369,12 @@ class Nmea2000Bridge:
                     req_pgn = payload[0] | (payload[1] << 8) | (payload[2] << 16)
                     if req_pgn == 60928:
                         self.claim_address()
+                    elif req_pgn == 126996:
+                        prod_payload = encode_pgn126996_product_info()
+                        self.send_fast_packet(126996, prod_payload)
+                    elif req_pgn == 126998:
+                        cfg_payload = encode_pgn126998_config_info()
+                        self.send_fast_packet(126998, cfg_payload)
                     elif req_pgn == 127501:
                         self.publish_switch_bank_status()
                     elif req_pgn == 127505:
