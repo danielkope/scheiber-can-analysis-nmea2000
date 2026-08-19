@@ -106,8 +106,8 @@ CHANNELS: Tuple[Channel, ...] = (
             auto_output=6, manual_output=7, running_signal="bilge_port_running"),
     Channel("bilge_starboard", "Starboard Bilge Pump", "Pumps", KIND_BILGE, UI_TYPE_THREE_STATE,
             auto_output=8, manual_output=9, running_signal="bilge_starboard_running"),
-    Channel("fresh_water_pump", "Fresh Water Pump", "Pumps", KIND_BINARY, UI_TYPE_THREE_STATE,
-            output=10, running_signal="fresh_water_pump_running", persisted_auto=True),
+    Channel("fresh_water_pump", "Fresh Water Pump", "Pumps", KIND_BINARY, UI_TYPE_TOGGLE,
+            output=10, running_signal="fresh_water_pump_running"),
     Channel("fridge_unit", "Fridge Unit", "Systems", KIND_BINARY, UI_TYPE_TOGGLE, output=11),
     Channel("lighting", "General Lighting", "Lighting", KIND_BINARY, UI_TYPE_TOGGLE, output=12),
 )
@@ -177,11 +177,22 @@ def bilge_target_bits(mode: str) -> Tuple[bool, bool]:
     return targets[mode]
 
 
-def bilge_mode_to_dbus(mode: str) -> Tuple[int, int]:
-    values = {MODE_OFF: (0, 0), MODE_AUTO: (0, 1), MODE_MANUAL: (1, 0)}
-    if mode not in values:
-        raise ValueError(f"cannot publish bilge mode {mode}")
-    return values[mode]
+def bilge_mode_to_dbus(mode: str, running: bool = False) -> Tuple[int, int]:
+    """Return native three-state values as (State, Auto).
+
+    ``Auto`` represents the selected Scheiber AUTO mode. ``State`` is the
+    physical pump-activity lamp: it is set while the pump is actually running,
+    including during an automatic float-triggered cycle. MANUAL is therefore
+    represented by State=1, Auto=0; AUTO while idle is State=0, Auto=1; and AUTO
+    while pumping is State=1, Auto=1.
+    """
+    if mode == MODE_OFF:
+        return int(bool(running)), 0
+    if mode == MODE_AUTO:
+        return int(bool(running)), 1
+    if mode == MODE_MANUAL:
+        return int(bool(running)), 0
+    raise ValueError(f"cannot publish bilge mode {mode}")
 
 
 def plan_binary(channel: Channel, current: Optional[bool], target: bool) -> List[CommandStep]:
