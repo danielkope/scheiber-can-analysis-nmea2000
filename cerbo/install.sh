@@ -6,6 +6,7 @@ set -eu
 APP_DIR="${APP_DIR:-/data/scheiber-gx}"
 SERVICE_LINK="${SERVICE_LINK:-/service/scheiber-gx}"
 SWITCH_SERVICE_LINK="${SWITCH_SERVICE_LINK:-/service/scheiber-switch}"
+N2K_SERVICE_LINK="${N2K_SERVICE_LINK:-/service/scheiber-n2k}"
 CAN_IF="${CAN_IF:-auto}"
 CAN_BITRATE="${CAN_BITRATE:-250000}"
 CAN_USB_SERIAL="${CAN_USB_SERIAL:-}"
@@ -19,6 +20,7 @@ EXPECTED_BRIDGE_SHA256="f3fecabfb42530c2fc9dc3007fbd0036092a33e4e10a57adc2242a0e
 RC_LOCAL="${RC_LOCAL:-/data/rc.local}"
 MAIN_MARKER="# scheiber-gx persistent runit service"
 SWITCH_MARKER="# scheiber-switch persistent runit service"
+N2K_MARKER="# scheiber-n2k persistent runit service"
 
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: run this installer as root." >&2
@@ -44,7 +46,7 @@ esac
 case "$SWITCH_TX_ENABLED" in 0|1) ;; *) echo "ERROR: SWITCH_TX_ENABLED must be 0 or 1." >&2; exit 1 ;; esac
 case "$SWITCH_RTR_ENABLED" in 0|1) ;; *) echo "ERROR: SWITCH_RTR_ENABLED must be 0 or 1." >&2; exit 1 ;; esac
 
-mkdir -p "$APP_DIR/service" "$APP_DIR/service-switch" "$APP_DIR/.install-new"
+mkdir -p "$APP_DIR/service" "$APP_DIR/service-switch" "$APP_DIR/service-n2k/log" "$APP_DIR/.install-new"
 STAGE="$APP_DIR/.install-new"
 rm -f "$STAGE"/*
 
@@ -73,6 +75,9 @@ fetch_file "service/run" "$STAGE/run-main"
 fetch_file "scheiber_switch_protocol.py" "$STAGE/scheiber_switch_protocol.py"
 fetch_file "switch_service.py" "$STAGE/switch_service.py"
 fetch_file "service-switch/run" "$STAGE/run-switch"
+fetch_file "nmea2000_bridge.py" "$STAGE/nmea2000_bridge.py"
+fetch_file "service-n2k/run" "$STAGE/run-n2k"
+fetch_file "service-n2k/log/run" "$STAGE/run-n2k-log"
 fetch_file "node-red-anchor-light-flow.json" "$STAGE/node-red-anchor-light-flow.json"
 fetch_file "node-red-bilge-alarms-flow.json" "$STAGE/node-red-bilge-alarms-flow.json"
 fetch_file "node-red-ac-power-flow.json" "$STAGE/node-red-ac-power-flow.json"
@@ -81,7 +86,8 @@ python3 -m py_compile \
     "$STAGE/bridge.py" \
     "$STAGE/resolve_can_interface.py" \
     "$STAGE/scheiber_switch_protocol.py" \
-    "$STAGE/switch_service.py"
+    "$STAGE/switch_service.py" \
+    "$STAGE/nmea2000_bridge.py"
 
 actual_bridge_sha="$(sha256sum "$STAGE/bridge.py" | awk '{print $1}')"
 if [ "$actual_bridge_sha" != "$EXPECTED_BRIDGE_SHA256" ]; then
@@ -153,7 +159,7 @@ if [ -f "$APP_DIR/bridge.py" ]; then
     install_mode="update"
     cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
 fi
-for file in resolve_can_interface.py scheiber_switch_protocol.py switch_service.py; do
+for file in resolve_can_interface.py scheiber_switch_protocol.py switch_service.py nmea2000_bridge.py; do
     [ ! -f "$APP_DIR/$file" ] || cp "$APP_DIR/$file" "$APP_DIR/$file.previous"
 done
 
@@ -161,8 +167,12 @@ mv "$STAGE/bridge.py" "$APP_DIR/bridge.py"
 mv "$STAGE/resolve_can_interface.py" "$APP_DIR/resolve_can_interface.py"
 mv "$STAGE/scheiber_switch_protocol.py" "$APP_DIR/scheiber_switch_protocol.py"
 mv "$STAGE/switch_service.py" "$APP_DIR/switch_service.py"
+mv "$STAGE/nmea2000_bridge.py" "$APP_DIR/nmea2000_bridge.py"
 mv "$STAGE/run-main" "$APP_DIR/service/run"
 mv "$STAGE/run-switch" "$APP_DIR/service-switch/run"
+mkdir -p "$APP_DIR/service-n2k/log"
+mv "$STAGE/run-n2k" "$APP_DIR/service-n2k/run"
+mv "$STAGE/run-n2k-log" "$APP_DIR/service-n2k/log/run"
 mv "$STAGE/node-red-anchor-light-flow.json" "$APP_DIR/node-red-anchor-light-flow.json"
 mv "$STAGE/node-red-bilge-alarms-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json"
 mv "$STAGE/node-red-ac-power-flow.json" "$APP_DIR/node-red-ac-power-flow.json"
@@ -170,8 +180,11 @@ chmod 755 \
     "$APP_DIR/bridge.py" \
     "$APP_DIR/resolve_can_interface.py" \
     "$APP_DIR/switch_service.py" \
+    "$APP_DIR/nmea2000_bridge.py" \
     "$APP_DIR/service/run" \
-    "$APP_DIR/service-switch/run"
+    "$APP_DIR/service-switch/run" \
+    "$APP_DIR/service-n2k/run" \
+    "$APP_DIR/service-n2k/log/run"
 chmod 644 "$APP_DIR/scheiber_switch_protocol.py" "$APP_DIR/node-red-anchor-light-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json" "$APP_DIR/node-red-ac-power-flow.json"
 rm -rf "$STAGE"
 
@@ -199,15 +212,19 @@ fi
 awk \
     -v main_marker="$MAIN_MARKER" \
     -v switch_marker="$SWITCH_MARKER" \
+    -v n2k_marker="$N2K_MARKER" \
     -v main_cmd='[ -e /service/scheiber-gx ] || ln -s /data/scheiber-gx/service /service/scheiber-gx' \
-    -v switch_cmd='[ -e /service/scheiber-switch ] || ln -s /data/scheiber-gx/service-switch /service/scheiber-switch' '
-    $0 == main_marker || $0 == switch_marker { skip_next=1; next }
+    -v switch_cmd='[ -e /service/scheiber-switch ] || ln -s /data/scheiber-gx/service-switch /service/scheiber-switch' \
+    -v n2k_cmd='[ -e /service/scheiber-n2k ] || ln -s /data/scheiber-gx/service-n2k /service/scheiber-n2k' '
+    $0 == main_marker || $0 == switch_marker || $0 == n2k_marker { skip_next=1; next }
     skip_next { skip_next=0; next }
     !inserted && $0 ~ /^[[:space:]]*exit[[:space:]]+0[[:space:]]*$/ {
         print main_marker
         print main_cmd
         print switch_marker
         print switch_cmd
+        print n2k_marker
+        print n2k_cmd
         inserted=1
     }
     { print }
@@ -217,6 +234,8 @@ awk \
             print main_cmd
             print switch_marker
             print switch_cmd
+            print n2k_marker
+            print n2k_cmd
         }
     }
 ' "$RC_LOCAL" > "$RC_LOCAL.tmp"
@@ -225,6 +244,7 @@ chmod 755 "$RC_LOCAL"
 
 [ -e "$SERVICE_LINK" ] || ln -s "$APP_DIR/service" "$SERVICE_LINK"
 [ -e "$SWITCH_SERVICE_LINK" ] || ln -s "$APP_DIR/service-switch" "$SWITCH_SERVICE_LINK"
+[ -e "$N2K_SERVICE_LINK" ] || ln -s "$APP_DIR/service-n2k" "$N2K_SERVICE_LINK"
 
 # Venus OS commonly provides daemontools/runit `svc` rather than the newer
 # `sv` command. Search the usual locations in case it is outside root's PATH.
@@ -239,6 +259,7 @@ if [ -z "$SVC" ]; then
 fi
 
 if [ -n "$SVC" ]; then
+    "$SVC" -d "$N2K_SERVICE_LINK" 2>/dev/null || true
     "$SVC" -d "$SWITCH_SERVICE_LINK" 2>/dev/null || true
     "$SVC" -d "$SERVICE_LINK" 2>/dev/null || true
     sleep 1
@@ -246,13 +267,14 @@ if [ -n "$SVC" ]; then
     "$SVC" -u "$SERVICE_LINK"
 
     # The main service owns CAN discovery. Give it a short head start before
-    # enabling the dependent switch process.
+    # enabling the dependent switch and n2k processes.
     attempt=0
     while [ "$attempt" -lt 10 ] && [ ! -s /run/scheiber-can-if ]; do
         attempt=$((attempt + 1))
         sleep 1
     done
     "$SVC" -u "$SWITCH_SERVICE_LINK"
+    "$SVC" -u "$N2K_SERVICE_LINK"
 else
     echo "WARNING: svc was not found; service links are installed and will start on boot." >&2
 fi

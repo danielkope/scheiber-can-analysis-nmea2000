@@ -108,7 +108,46 @@ tanks.fuel.92.currentLevel        0.79
 tanks.fuel.92.capacity            0.500
 ```
 
-This proves the complete path from the custom D-Bus services to standard PGN 127505 on the vessel network.
+## Native NMEA 2000 Gateway (`cerbo/nmea2000_bridge.py`)
+
+In addition to native Venus OS tank export, the dedicated **Scheiber NMEA 2000 Gateway** (`/service/scheiber-n2k`) operates directly on **`can1`** to publish starter battery voltages and provide bi-directional digital switching for the B&G Zeus3 chartplotter:
+
+### 1. Starter Battery Status (`PGN 127508 - 0x1F214`)
+
+Broadcast at 1.0 Hz with 0.01 V resolution:
+
+| Battery Instance | Channel / Battery | D-Bus Source Service | NMEA 2000 Destination |
+|:---:|---|---|---|
+| **Instance 0** | **Port Engine Starter** | `com.victronenergy.battery.scheiber_engine_port` | B&G Engine 1 Gauge & Battery Bar |
+| **Instance 1** | **Starboard Engine Starter** | `com.victronenergy.battery.scheiber_engine_starboard` | B&G Engine 2 Gauge & Battery Bar |
+| **Instance 2** | **Generator Starter** | `com.victronenergy.battery.scheiber_generator_starter` | B&G Generator Gauge & Battery Bar |
+
+### 2. Binary Switch Bank Status & Control (`PGN 127501` & `PGN 127502`)
+
+Provides native digital switching on the B&G Zeus3 touch screen for all 15 vessel circuits:
+
+* **`PGN 127501` (Binary Switch Bank Status)**: Broadcast at 1.0 Hz and instantly on any D-Bus state change.
+* **`PGN 127502` (Binary Switch Bank Control)**: Listens for commands from B&G Zeus3 to toggle physical Scheiber Multibloc V8 relays.
+
+| Channel | Function / Name | Default State | B&G Switch Tile |
+|:---:|---|:---:|---|
+| **0** | **Anchor Light** | 0 (OFF) | Toggle Switch / Auto Rule |
+| **1** | **Navigation Lights** | 0 (OFF) | Toggle Switch |
+| **2** | **Steaming / Engine Light** | 0 (OFF) | Toggle Switch |
+| **3** | **Deck Floodlight** | 0 (OFF) | Toggle Switch |
+| **4** | **Cockpit Lights** | 0 (OFF) | Toggle Switch |
+| **5** | **Saloon Lights** | 0 (OFF) | Toggle Switch |
+| **6** | **Cabin Lights** | 0 (OFF) | Toggle Switch |
+| **7** | **Fresh Water Pump** | 1 (ON) | Toggle Switch |
+| **8** | **Refrigeration** | 1 (ON) | Toggle Switch |
+| **9** | **Auxiliary / 12V Sockets** | 1 (ON) | Toggle Switch |
+| **10** | **Port Bilge Auto** | 1 (ON) | Status Indicator |
+| **11** | **Port Bilge Manual** | 0 (OFF) | Momentary / Toggle |
+| **12** | **Starboard Bilge Auto** | 1 (ON) | Status Indicator |
+| **13** | **Starboard Bilge Manual** | 0 (OFF) | Momentary / Toggle |
+| **14** | **Shower / Sump Pump** | 0 (OFF) | Toggle Switch |
+
+---
 
 ## Signal K configuration
 

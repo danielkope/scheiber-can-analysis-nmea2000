@@ -1,0 +1,7 @@
+#!/bin/sh
+exec 2>&1
+echo "*** starting scheiber-n2k ***"
+. /etc/profile.d/profile.sh
+export PYTHONUNBUFFERED=1
+export N2K_IF="can1"
+exec python3 /data/scheiber-gx/nmea2000_bridge.py
