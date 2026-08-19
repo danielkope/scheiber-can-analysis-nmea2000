@@ -1083,6 +1083,18 @@ class Bridge:
 
     def update_ac_sources(self):
         """Update applied AC source telemetry and Mastervolt inverter state."""
+        now = time.monotonic()
+        has_voltage = (
+            self.last_house_panel_voltage is not None
+            and self.house_panel_last_update is not None
+            and now - self.house_panel_last_update <= FAST_TELEMETRY_STALE_SECONDS
+            and 80.0 <= float(self.last_house_panel_voltage) <= 300.0
+        )
+        is_inverting = (
+            self.mastervolt_inverter_state == 1
+            or (has_voltage and self.house_panel_applied_source in (SOURCE_OFF, None, 0x01))
+        )
+
         ac_name = {
             SOURCE_OFF: "OFF",
             SOURCE_SHORE: "SHORE",
@@ -1093,8 +1105,8 @@ class Bridge:
         )
 
         if (
-            self.mastervolt_inverter_state == 1
-            and self.house_panel_applied_source in (SOURCE_OFF, None)
+            is_inverting
+            and self.house_panel_applied_source in (SOURCE_OFF, None, 0x01)
         ):
             house_source_effective = SOURCE_INVERTER
             house_name = "INVERTER"
@@ -1115,9 +1127,9 @@ class Bridge:
             self.service["/Scheiber/AcPanelAppliedSourceText"] = ac_name
             self.service["/Scheiber/HousePanelAppliedSource"] = house_source_effective
             self.service["/Scheiber/HousePanelAppliedSourceText"] = house_name
-            self.service["/Scheiber/MastervoltInverterState"] = self.mastervolt_inverter_state
+            self.service["/Scheiber/MastervoltInverterState"] = 1 if is_inverting else 0
             self.service["/Scheiber/MastervoltInverterStateText"] = (
-                "ON" if self.mastervolt_inverter_state == 1 else "OFF"
+                "ON" if is_inverting else "OFF"
             )
 
     def update_genset_ac_voltage_publication(self):
@@ -1216,11 +1228,21 @@ class Bridge:
         if not self.mastervolt_service:
             return
 
-        is_on = self.mastervolt_inverter_state == 1
-        self.mastervolt_service["/State"] = 9 if is_on else 0
-        self.mastervolt_service["/Mode"] = 2 if is_on else 4
+        now = time.monotonic()
+        has_voltage = (
+            self.last_house_panel_voltage is not None
+            and self.house_panel_last_update is not None
+            and now - self.house_panel_last_update <= FAST_TELEMETRY_STALE_SECONDS
+            and 80.0 <= float(self.last_house_panel_voltage) <= 300.0
+        )
+        not_grid_or_gen = self.house_panel_applied_source in (SOURCE_OFF, None, 0x01)
 
-        if is_on and self.last_house_panel_voltage is not None:
+        is_inverting = (self.mastervolt_inverter_state == 1) or (has_voltage and not_grid_or_gen)
+
+        self.mastervolt_service["/State"] = 9 if is_inverting else 0
+        self.mastervolt_service["/Mode"] = 2 if is_inverting else 4
+
+        if is_inverting and has_voltage:
             self.mastervolt_service["/Ac/Out/L1/V"] = float(self.last_house_panel_voltage)
         else:
             self.mastervolt_service["/Ac/Out/L1/V"] = None

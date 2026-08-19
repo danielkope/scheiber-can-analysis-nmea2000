@@ -117,7 +117,7 @@ cerbo/uninstall.sh                  disables both services
 The telemetry bridge is version `5.8.0`, with canonical SHA-256:
 
 ```text
-50a85211bbcb74f5a05159a555f6db3057cfef3b3f90e1f695d90a60cfc0c95d
+8522f4b990afedbf487d69534a4541a445485cdee7828ecd8596682aa1f761bc
 ```
 
 ## Fresh installation or update with curl
