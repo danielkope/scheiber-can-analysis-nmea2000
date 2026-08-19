@@ -360,6 +360,14 @@ except Exception:
     fi
 fi
 
+# Ensure VE.Can NMEA 2000 Gateway is enabled on can1 (NMEA 2000) and disabled on can0 (Scheiber)
+dbus -y com.victronenergy.settings /Settings/Vecan/can1/N2kGatewayEnabled SetValue 1 2>/dev/null || true
+dbus -y com.victronenergy.settings /Settings/Vecan/can0/N2kGatewayEnabled SetValue 0 2>/dev/null || true
+if [ -n "$SVC" ]; then
+    "$SVC" -t /service/vecan-dbus.can1 2>/dev/null || true
+    "$SVC" -t /service/vecan-dbus.can0 2>/dev/null || true
+fi
+
 cat <<EOF
 Scheiber GX services installed.
 
