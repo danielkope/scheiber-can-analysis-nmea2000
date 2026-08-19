@@ -15,7 +15,7 @@ The following has now been validated on the vessel:
 - feedback-gated state convergence works for the tested circuits;
 - reboot testing exposed unstable Linux `canN` enumeration for the USB adapter.
 
-The remaining pump-specific validation item is a controlled bilge AUTO cycle to
+The remaining pump-specific validation item is a controlled bilge AUTO-triggered cycle to
 confirm that the known bilge-running input bits behave in AUTO exactly as they
 do during the already observed MANUAL tests.
 
@@ -262,7 +262,7 @@ raised as an anomaly alarm.
 
 ## 7. Fresh-water pressure pump semantics
 
-Output 10 means the pressure-water system is enabled. It does not mean the motor
+Output 10 means the pressure system is enabled. It does not mean the motor
 is currently turning:
 
 ```text
