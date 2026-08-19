@@ -493,6 +493,12 @@ Per frame:
 | **Port Engine Starter** | `0x00561008` | 60A Multi-Output Charger (B3) | `LE16[2..3] * 0.1 V` | `com.victronenergy.battery.scheiber_engine_port` |
 | **Generator Starter** | `0x00501020` | 25A Generator Charger Family | `LE16[0..1] * 0.1 V` | `com.victronenergy.battery.scheiber_generator_starter`<br>`com.victronenergy.genset.scheiber` (`/StarterVoltage`) |
 
+> [!NOTE]
+> **Generator Starter Dual-Publication Design**:
+> The generator starter battery voltage is deliberately published to two locations on D-Bus:
+> 1. **`com.victronenergy.genset.scheiber` (`/StarterVoltage`)**: Standard Victron generator property displayed directly within the **Generator** tile and settings menu for generator-specific crank monitoring.
+> 2. **`com.victronenergy.battery.scheiber_generator_starter` (DeviceInstance 88)**: Standalone battery service ensuring the starter battery is also visible in the unified **Device List &rarr; Batteries** menu alongside the Port and Starboard engine batteries.
+
 ### Smart Low-Voltage Alarm Algorithm
 
 To avoid false alarms during normal engine/generator cranking dips (where voltage pulls down to ~10.5V for 1-3 seconds), a smart filtering engine is evaluated in `cerbo/bridge.py`:

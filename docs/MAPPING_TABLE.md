@@ -23,7 +23,7 @@
 | `0x005A1020` | 0-1 | Generator-specific frequency | `uint16` LE | x0.1 Hz | confirmed physical field and generator-specific in follow-on test |
 | `0x02040898` | 0-1 | Shared/common AC voltage | `uint16` BE | x1 V | confirmed field; not generator-specific |
 | `0x02040898` | 2-3 | Shared/common AC frequency | `uint16` BE | x1 Hz | confirmed field; can remain live on shore with generator off |
-| `0x00501020` | 0-1 | Generator starter voltage | `uint16` LE | x0.1 V | confirmed; published by bridge with smart low-voltage alarm |
+| `0x00501020` | 0-1 | Generator starter voltage | `uint16` LE | x0.1 V | confirmed; published to both genset `/StarterVoltage` and battery `scheiber_generator_starter` with smart alarm |
 | `0x00501008` | 0-1 | Starboard Engine starter voltage | `uint16` LE | x0.1 V | confirmed (60A Charger B1); published by bridge with smart alarm |
 | `0x00561008` | 2-3 | Port Engine starter voltage | `uint16` LE | x0.1 V | confirmed (60A Charger B3); published by bridge with smart alarm |
 | `0x00000B88` | 2-3 | House Panel Line Voltage (Heartbeat) | `uint16` BE | x1 V | confirmed 1 Hz continuous heartbeat; state-aware on startup |
