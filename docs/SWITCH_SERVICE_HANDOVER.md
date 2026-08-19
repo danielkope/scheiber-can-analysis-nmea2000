@@ -411,24 +411,19 @@ Potential rules:
 - warn and optionally disable after abnormal continuous activity;
 - alarm when disabled but running feedback remains active.
 
-### Bilge alarms
+### 11.4 Deployed Node-RED Automation Flows
 
-Do not automatically stop a long-running bilge. Long runtime can indicate water
-ingress and should escalate alarms while pumping continues.
+The switch service integrates with automated flows on Node-RED (`https://venus.local:1881/`):
 
-Suggested starting policy:
+#### 1. Automatic Sunset/Sunrise Anchor Light Controller (`Anchor Light Auto`)
+Monitors vessel GPS position (`com.victronenergy.gps`), computes local sunrise/sunset, and controls the Anchor Light switch automatically when Auto mode is selected on D-Bus.
 
-```text
-running 0 -> 1            immediate event
-running > 2 minutes       warning
-running > 5 minutes       critical alarm
-several cycles/hour       repeated-ingress warning
-mode OFF + running        immediate anomaly alarm
-MANUAL + no running       command/pump fault after confirmation delay
-running 1 -> 0            close event and record duration
-```
+![Anchor Light Auto Flow](images/node-red-anchor-light-auto-flow.png)
 
-Thresholds must be tuned from actual vessel behaviour.
+#### 2. Real-Time Bilge Alarms & Monitoring (`Bilge Alarms & Monitor`)
+Listens to continuous pump motor telemetry (`0x02141808`) and mode registers (`0x02140808`), providing 2-minute run warnings, 5-minute critical alarms, and mode-OFF anomaly injection into Venus OS GUI notifications.
+
+![Bilge Alarms and Monitor Flow](images/node-red-bilge-alarms-and-monitor-flow.png)
 
 ## 12. Rollback
 

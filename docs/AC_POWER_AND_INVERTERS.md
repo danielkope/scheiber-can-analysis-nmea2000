@@ -139,3 +139,5 @@ The flow (`cerbo/node-red-ac-power-flow.json`) monitors all D-Bus paths and main
 ```
 
 This flow is automatically installed, staged, and merged non-destructively by `install.sh`.
+
+![Node-RED AC Power Routing Flow](images/node-red-ac-power-and-inverter-routing-flow.png)
