@@ -50,22 +50,6 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-import dbus
-import dbus.mainloop.glib
-import dbus.service
-from gi.repository import GLib
-
-# Explicit relative import prevents picking up any older, flat /data copy.
-from vedbus import VeDbusService
-
-CAN_IF = os.environ.get("CAN_IF", "can2")
-
-SERVICE_NAME = "com.victronenergy.genset.scheiber"
-DEVICE_INSTANCE = 40
-PRODUCT_ID = 0xFFFF
-PRODUCT_NAME = "Scheiber Generator"
-BRIDGE_VERSION = "5.5.0"
-
 # ---------------------------------------------------------------------------
 # Find Victron velib_python
 # ---------------------------------------------------------------------------
@@ -102,7 +86,7 @@ SERVICE_NAME = "com.victronenergy.genset.scheiber"
 DEVICE_INSTANCE = 40
 PRODUCT_ID = 0xFFFF
 PRODUCT_NAME = "Scheiber Generator"
-BRIDGE_VERSION = "5.4.2"
+BRIDGE_VERSION = "5.6.0"
 
 LOGFILE = "/data/scheiber-gx/bridge.log"
 STATUSFILE = "/data/scheiber-gx/status.json"
@@ -124,7 +108,7 @@ GEN_FREQ_ID = 0x005A1020
 GEN_AC_ID = 0x02040898
 
 # Confirmed Scheiber source selector feedback. RECEIVE ONLY.
-# byte 0 enum: 0x01 OFF, 0x02 SHORE, 0x04 GENERATOR.
+# byte 0 enum: 0x01 OFF, 0x02 SHORE, 0x04 GENERATOR, 0x08 INVERTER.
 AC_PANEL_APPLIED_ID = 0x02400B90
 HOUSE_PANEL_APPLIED_ID = 0x02400B88
 
@@ -134,9 +118,16 @@ HOUSE_PANEL_APPLIED_ID = 0x02400B88
 AC_PANEL_TELEMETRY_ID = 0x02040B90
 HOUSE_PANEL_TELEMETRY_ID = 0x02040B88
 
+# Mastervolt Inverter / AC ramp transition marker (0x02140898)
+# byte 0: 0x02 = OFF / Ramp-Down, 0x03 = ON / Ramp-Up
+AC_RAMP_MARKER_ID = 0x02140898
+AC_RAMP_DOWN = 0x02
+AC_RAMP_UP = 0x03
+
 SOURCE_OFF = 0x01
 SOURCE_SHORE = 0x02
 SOURCE_GENERATOR = 0x04
+SOURCE_INVERTER = 0x08
 
 # Generator starter-battery / 0x1020 charger telemetry.
 # bytes 0..1: uint16 LE x 0.1 V (strong starter-battery correlation)
@@ -315,6 +306,7 @@ CAN_FILTER_IDS = tuple(sorted(set(
         HOUSE_PANEL_APPLIED_ID,
         AC_PANEL_TELEMETRY_ID,
         HOUSE_PANEL_TELEMETRY_ID,
+        AC_RAMP_MARKER_ID,
         CHARGER_60A_TELEMETRY_ID,
         CHARGER_60A_DYNAMIC_ID,
     )
@@ -385,6 +377,7 @@ class Bridge:
         # Scheiber source-selection and panel telemetry.
         self.ac_panel_applied_source = None
         self.house_panel_applied_source = None
+        self.mastervolt_inverter_state = 0
         self.last_ac_panel_voltage = None
         self.last_house_panel_voltage = None
         self.last_ac_panel_freq_status = None
@@ -515,7 +508,25 @@ class Bridge:
             "last_generator_charger_current_a": self.last_generator_charger_current,
             "last_generator_charger_ac_voltage_v": self.last_generator_charger_ac_voltage,
             "ac_panel_applied_source": self.ac_panel_applied_source,
-            "house_panel_applied_source": self.house_panel_applied_source,
+            "ac_panel_applied_source_text": (
+                self.service["/Scheiber/AcPanelAppliedSourceText"]
+                if self.service
+                else None
+            ),
+            "house_panel_applied_source": (
+                self.service["/Scheiber/HousePanelAppliedSource"]
+                if self.service
+                else None
+            ),
+            "house_panel_applied_source_text": (
+                self.service["/Scheiber/HousePanelAppliedSourceText"]
+                if self.service
+                else None
+            ),
+            "mastervolt_inverter_state": self.mastervolt_inverter_state,
+            "mastervolt_inverter_state_text": (
+                "ON" if self.mastervolt_inverter_state == 1 else "OFF"
+            ),
             "ac_panel_voltage_v": self.last_ac_panel_voltage,
             "house_panel_voltage_v": self.last_house_panel_voltage,
             "startup_resync_active": self.startup_resync_active,
@@ -636,7 +647,11 @@ class Bridge:
         self.service.add_path("/Scheiber/GeneratorChargerCurrent", None)
         self.service.add_path("/Scheiber/GeneratorChargerAcVoltage", None)
         self.service.add_path("/Scheiber/AcPanelAppliedSource", None)
+        self.service.add_path("/Scheiber/AcPanelAppliedSourceText", None)
         self.service.add_path("/Scheiber/HousePanelAppliedSource", None)
+        self.service.add_path("/Scheiber/HousePanelAppliedSourceText", None)
+        self.service.add_path("/Scheiber/MastervoltInverterState", 0)
+        self.service.add_path("/Scheiber/MastervoltInverterStateText", "OFF")
         self.service.add_path("/Scheiber/AcPanelVoltage", None)
         self.service.add_path("/Scheiber/HousePanelVoltage", None)
         self.service.add_path("/Scheiber/AcPanelFrequencyStatus", None)
@@ -945,6 +960,45 @@ class Bridge:
         svc["/Dc/0/Current"] = None
         svc["/Dc/0/Power"] = None
         svc["/Soc"] = None
+
+    def update_ac_sources(self):
+        """Update applied AC source telemetry and Mastervolt inverter state."""
+        ac_name = {
+            SOURCE_OFF: "OFF",
+            SOURCE_SHORE: "SHORE",
+            SOURCE_GENERATOR: "GENERATOR",
+        }.get(
+            self.ac_panel_applied_source,
+            "UNKNOWN" if self.ac_panel_applied_source is not None else None,
+        )
+
+        if (
+            self.mastervolt_inverter_state == 1
+            and self.house_panel_applied_source in (SOURCE_OFF, None)
+        ):
+            house_source_effective = SOURCE_INVERTER
+            house_name = "INVERTER"
+        else:
+            house_source_effective = self.house_panel_applied_source
+            house_name = {
+                SOURCE_OFF: "OFF",
+                SOURCE_SHORE: "SHORE",
+                SOURCE_GENERATOR: "GENERATOR",
+                SOURCE_INVERTER: "INVERTER",
+            }.get(
+                self.house_panel_applied_source,
+                "UNKNOWN" if self.house_panel_applied_source is not None else None,
+            )
+
+        if self.service:
+            self.service["/Scheiber/AcPanelAppliedSource"] = self.ac_panel_applied_source
+            self.service["/Scheiber/AcPanelAppliedSourceText"] = ac_name
+            self.service["/Scheiber/HousePanelAppliedSource"] = house_source_effective
+            self.service["/Scheiber/HousePanelAppliedSourceText"] = house_name
+            self.service["/Scheiber/MastervoltInverterState"] = self.mastervolt_inverter_state
+            self.service["/Scheiber/MastervoltInverterStateText"] = (
+                "ON" if self.mastervolt_inverter_state == 1 else "OFF"
+            )
 
     def update_genset_ac_voltage_publication(self):
         """Publish generator voltage only when the source evidence fits."""
@@ -1959,7 +2013,6 @@ class Bridge:
 
             if can_id == AC_PANEL_APPLIED_ID:
                 self.ac_panel_applied_source = source
-                self.service["/Scheiber/AcPanelAppliedSource"] = source
                 self.log(
                     "RX AC panel applied source: {} ({:02X})".format(
                         source_name, source
@@ -1967,14 +2020,32 @@ class Bridge:
                 )
             else:
                 self.house_panel_applied_source = source
-                self.service["/Scheiber/HousePanelAppliedSource"] = source
                 self.log(
                     "RX House panel applied source: {} ({:02X})".format(
                         source_name, source
                     )
                 )
 
+            self.update_ac_sources()
             self.update_genset_ac_voltage_publication()
+            self.write_status()
+            return
+
+        # --------------------------------------------------------------
+        # Mastervolt Inverter / AC ramp transition marker (0x02140898)
+        # --------------------------------------------------------------
+        if can_id == AC_RAMP_MARKER_ID and len(data) >= 1:
+            marker = int(data[0])
+            if marker == AC_RAMP_UP:  # 0x03
+                self.mastervolt_inverter_state = 1
+                self.log("RX Mastervolt Inverter state: ON / INVERTING (0x03)")
+            elif marker == AC_RAMP_DOWN:  # 0x02
+                self.mastervolt_inverter_state = 0
+                self.log("RX Mastervolt Inverter state: OFF / STANDBY (0x02)")
+            else:
+                self.log("RX AC ramp transition marker: 0x{:02X}".format(marker))
+
+            self.update_ac_sources()
             self.write_status()
             return
 

@@ -394,6 +394,7 @@ Receive-only mappings:
 |---|---|
 | `0x02400B90` | AC panel applied source |
 | `0x02400B88` | House panel applied source |
+| `0x02140898` | MasterVolt Inverter / AC ramp transition marker (0x02 OFF, 0x03 ON) |
 | `0x02040B90` bytes 4-5 BE | AC panel voltage |
 | `0x02040B88` bytes 4-5 BE | House panel voltage |
 
@@ -403,11 +404,17 @@ Source enum:
 01 = OFF
 02 = SHORE
 04 = GENERATOR
+08 = INVERTER (Effective House source when Mastervolt is active)
 ```
 
-Request IDs `0x02420B90` and `0x02420B88` are not transmitted.
+Inverter & AC D-Bus paths on `com.victronenergy.genset.scheiber`:
+- `/Scheiber/HousePanelAppliedSource` & `/Scheiber/HousePanelAppliedSourceText`
+- `/Scheiber/AcPanelAppliedSource` & `/Scheiber/AcPanelAppliedSourceText`
+- `/Scheiber/MastervoltInverterState` & `/Scheiber/MastervoltInverterStateText`
+- `/Scheiber/HousePanelVoltage` & `/Scheiber/AcPanelVoltage`
+- `/Scheiber/HousePanelFrequencyStatus` & `/Scheiber/AcPanelFrequencyStatus`
 
-There is currently no synthetic `com.victronenergy.acsystem.scheiber` service. On systems without VE.Bus/acsystem, SystemCalc may therefore show imperfect AC topology labels even though generator control itself works.
+Node-RED flow `cerbo/node-red-ac-power-flow.json` provides real-time power routing matrix monitoring.
 
 ## Tank services
 

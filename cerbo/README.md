@@ -114,10 +114,10 @@ cerbo/install.sh                    transactional installer/updater
 cerbo/uninstall.sh                  disables both services
 ```
 
-The telemetry bridge is version `5.5.0`, with canonical SHA-256:
+The telemetry bridge is version `5.6.0`, with canonical SHA-256:
 
 ```text
-31bf49883c7cfff8ccaa26f2e4d69d793d4655d8ce51e5fe1ec8940733ed20e1
+d53d54d5f1319b36a85ce96da9124ec49df1c674876976a01e2c9fcc055fd4ae
 ```
 
 ## Fresh installation or update with curl
@@ -226,7 +226,13 @@ The repository includes ready-to-use Node-RED flows installed automatically when
 - **5-Minute Critical Alarm**: Emits Venus GUI Critical Alarm (potential water ingress) if continuous pumping exceeds 5 minutes. (Never stops the pump automatically).
 - **Mode OFF Anomaly**: Immediate critical alarm if a bilge pump is running while its GX switch is in `OFF` mode.
 - **Frequent Cycling Warning**: Alerts if a bilge cycles 4 or more times within a 60-minute window.
-- Injects notifications directly into Venus GUI (`/Notifications/Inject` on `com.victronenergy.platform`), triggering UI banners, VRM alerts, and the Cerbo buzzer.
+### 3. AC Power & Inverter Routing Matrix (`node-red-ac-power-flow.json`)
+- Tracks the vessel's 230V AC distribution topology (House Panel vs Air Conditioning Panel).
+- Tracks MasterVolt 2000W Inverter operational state (`ON` / `OFF`) via `0x02140898` transition markers.
+- Monitors applied source selectors (Shore Power, Generator, MasterVolt Inverter, OFF) and live voltages.
+- Emits real-time state object to Node-RED debug dashboard and automation logic.
+
+Read [`../docs/AC_POWER_AND_INVERTERS.md`](../docs/AC_POWER_AND_INVERTERS.md) for the complete 230V AC distribution, Scheiber transfer contactors, and inverter architecture.
 
 Read [`../docs/SWITCH_SERVICE_HANDOVER.md`](../docs/SWITCH_SERVICE_HANDOVER.md)
 for the architecture, safety rules, field evidence, rollback procedure, and

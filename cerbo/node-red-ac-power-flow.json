@@ -1,0 +1,175 @@
+[
+  {
+    "id": "scheiber_ac_power_tab",
+    "type": "tab",
+    "label": "AC Power & Inverter Routing",
+    "disabled": false,
+    "info": "Real-time AC power routing and Mastervolt 2000W Inverter monitor for Scheiber House and Air Conditioning distribution panels."
+  },
+  {
+    "id": "genset_ac_status_in",
+    "type": "victron-input-custom",
+    "z": "scheiber_ac_power_tab",
+    "service": "com.victronenergy.genset.scheiber",
+    "path": "/Scheiber/HousePanelAppliedSourceText",
+    "serviceObj": {
+      "service": "com.victronenergy.genset.scheiber",
+      "name": "Scheiber Genset & AC Panels"
+    },
+    "pathObj": {
+      "path": "/Scheiber/HousePanelAppliedSourceText",
+      "type": "string",
+      "name": "House Panel Source"
+    },
+    "name": "House Panel Source",
+    "onlyChanges": false,
+    "roundValues": "disabled",
+    "x": 160,
+    "y": 120,
+    "wires": [
+      [
+        "process_ac_routing"
+      ]
+    ]
+  },
+  {
+    "id": "mastervolt_inverter_in",
+    "type": "victron-input-custom",
+    "z": "scheiber_ac_power_tab",
+    "service": "com.victronenergy.genset.scheiber",
+    "path": "/Scheiber/MastervoltInverterStateText",
+    "serviceObj": {
+      "service": "com.victronenergy.genset.scheiber",
+      "name": "Scheiber Genset & AC Panels"
+    },
+    "pathObj": {
+      "path": "/Scheiber/MastervoltInverterStateText",
+      "type": "string",
+      "name": "Mastervolt Inverter State"
+    },
+    "name": "Mastervolt Inverter",
+    "onlyChanges": false,
+    "roundValues": "disabled",
+    "x": 160,
+    "y": 180,
+    "wires": [
+      [
+        "process_ac_routing"
+      ]
+    ]
+  },
+  {
+    "id": "ac_panel_source_in",
+    "type": "victron-input-custom",
+    "z": "scheiber_ac_power_tab",
+    "service": "com.victronenergy.genset.scheiber",
+    "path": "/Scheiber/AcPanelAppliedSourceText",
+    "serviceObj": {
+      "service": "com.victronenergy.genset.scheiber",
+      "name": "Scheiber Genset & AC Panels"
+    },
+    "pathObj": {
+      "path": "/Scheiber/AcPanelAppliedSourceText",
+      "type": "string",
+      "name": "A/C Panel Source"
+    },
+    "name": "A/C Panel Source",
+    "onlyChanges": false,
+    "roundValues": "disabled",
+    "x": 160,
+    "y": 240,
+    "wires": [
+      [
+        "process_ac_routing"
+      ]
+    ]
+  },
+  {
+    "id": "house_voltage_in",
+    "type": "victron-input-custom",
+    "z": "scheiber_ac_power_tab",
+    "service": "com.victronenergy.genset.scheiber",
+    "path": "/Scheiber/HousePanelVoltage",
+    "serviceObj": {
+      "service": "com.victronenergy.genset.scheiber",
+      "name": "Scheiber Genset & AC Panels"
+    },
+    "pathObj": {
+      "path": "/Scheiber/HousePanelVoltage",
+      "type": "float",
+      "name": "House AC Voltage"
+    },
+    "name": "House AC Voltage",
+    "onlyChanges": false,
+    "roundValues": "disabled",
+    "x": 160,
+    "y": 300,
+    "wires": [
+      [
+        "process_ac_routing"
+      ]
+    ]
+  },
+  {
+    "id": "ac_voltage_in",
+    "type": "victron-input-custom",
+    "z": "scheiber_ac_power_tab",
+    "service": "com.victronenergy.genset.scheiber",
+    "path": "/Scheiber/AcPanelVoltage",
+    "serviceObj": {
+      "service": "com.victronenergy.genset.scheiber",
+      "name": "Scheiber Genset & AC Panels"
+    },
+    "pathObj": {
+      "path": "/Scheiber/AcPanelVoltage",
+      "type": "float",
+      "name": "A/C Panel Voltage"
+    },
+    "name": "A/C Panel Voltage",
+    "onlyChanges": false,
+    "roundValues": "disabled",
+    "x": 160,
+    "y": 360,
+    "wires": [
+      [
+        "process_ac_routing"
+      ]
+    ]
+  },
+  {
+    "id": "process_ac_routing",
+    "type": "function",
+    "z": "scheiber_ac_power_tab",
+    "name": "AC Routing & Power Flow Matrix",
+    "func": "// Maintain cached state of all AC inputs\nlet state = context.get('ac_state') || {\n    house_source: 'OFF',\n    ac_source: 'OFF',\n    mastervolt_inverter: 'OFF',\n    house_voltage: 0,\n    ac_voltage: 0,\n    last_updated: null\n};\n\nif (msg.topic && msg.topic.includes('HousePanelAppliedSourceText')) {\n    state.house_source = msg.payload || 'OFF';\n} else if (msg.topic && msg.topic.includes('MastervoltInverterStateText')) {\n    state.mastervolt_inverter = msg.payload || 'OFF';\n} else if (msg.topic && msg.topic.includes('AcPanelAppliedSourceText')) {\n    state.ac_source = msg.payload || 'OFF';\n} else if (msg.topic && msg.topic.includes('HousePanelVoltage')) {\n    state.house_voltage = parseFloat(msg.payload) || 0;\n} else if (msg.topic && msg.topic.includes('AcPanelVoltage')) {\n    state.ac_voltage = parseFloat(msg.payload) || 0;\n}\n\nstate.last_updated = new Date().toISOString();\ncontext.set('ac_state', state);\n\nlet summary = 'House: ' + state.house_source + ' (' + state.house_voltage + 'V) | ' +\n              'A/C: ' + state.ac_source + ' (' + state.ac_voltage + 'V) | ' +\n              'Mastervolt 2000W: ' + state.mastervolt_inverter;\n\nnode.status({\n    fill: (state.mastervolt_inverter === 'ON' || state.house_source !== 'OFF') ? 'green' : 'grey',\n    shape: 'dot',\n    text: summary\n});\n\nmsg.payload = {\n    summary: summary,\n    house: {\n        source: state.house_source,\n        voltage_v: state.house_voltage,\n        active: state.house_source !== 'OFF' || state.house_voltage > 50\n    },\n    air_conditioning: {\n        source: state.ac_source,\n        voltage_v: state.ac_voltage,\n        active: state.ac_source !== 'OFF' || state.ac_voltage > 50\n    },\n    mastervolt_inverter: {\n        state: state.mastervolt_inverter,\n        inverting: state.mastervolt_inverter === 'ON'\n    },\n    timestamp: state.last_updated\n};\n\nreturn msg;\n",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 480,
+    "y": 240,
+    "wires": [
+      [
+        "debug_ac_routing"
+      ]
+    ]
+  },
+  {
+    "id": "debug_ac_routing",
+    "type": "debug",
+    "z": "scheiber_ac_power_tab",
+    "name": "AC Power Flow State",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": true,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "payload.summary",
+    "statusType": "msg",
+    "x": 750,
+    "y": 240,
+    "wires": []
+  }
+]

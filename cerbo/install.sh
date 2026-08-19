@@ -15,7 +15,7 @@ SWITCH_TX_ENABLED="${SWITCH_TX_ENABLED:-1}"
 SWITCH_RTR_ENABLED="${SWITCH_RTR_ENABLED:-1}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-EXPECTED_BRIDGE_SHA256="31bf49883c7cfff8ccaa26f2e4d69d793d4655d8ce51e5fe1ec8940733ed20e1"
+EXPECTED_BRIDGE_SHA256="d53d54d5f1319b36a85ce96da9124ec49df1c674876976a01e2c9fcc055fd4ae"
 RC_LOCAL="${RC_LOCAL:-/data/rc.local}"
 MAIN_MARKER="# scheiber-gx persistent runit service"
 SWITCH_MARKER="# scheiber-switch persistent runit service"
@@ -75,6 +75,7 @@ fetch_file "switch_service.py" "$STAGE/switch_service.py"
 fetch_file "service-switch/run" "$STAGE/run-switch"
 fetch_file "node-red-anchor-light-flow.json" "$STAGE/node-red-anchor-light-flow.json"
 fetch_file "node-red-bilge-alarms-flow.json" "$STAGE/node-red-bilge-alarms-flow.json"
+fetch_file "node-red-ac-power-flow.json" "$STAGE/node-red-ac-power-flow.json"
 
 python3 -m py_compile \
     "$STAGE/bridge.py" \
@@ -164,13 +165,14 @@ mv "$STAGE/run-main" "$APP_DIR/service/run"
 mv "$STAGE/run-switch" "$APP_DIR/service-switch/run"
 mv "$STAGE/node-red-anchor-light-flow.json" "$APP_DIR/node-red-anchor-light-flow.json"
 mv "$STAGE/node-red-bilge-alarms-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json"
+mv "$STAGE/node-red-ac-power-flow.json" "$APP_DIR/node-red-ac-power-flow.json"
 chmod 755 \
     "$APP_DIR/bridge.py" \
     "$APP_DIR/resolve_can_interface.py" \
     "$APP_DIR/switch_service.py" \
     "$APP_DIR/service/run" \
     "$APP_DIR/service-switch/run"
-chmod 644 "$APP_DIR/scheiber_switch_protocol.py" "$APP_DIR/node-red-anchor-light-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json"
+chmod 644 "$APP_DIR/scheiber_switch_protocol.py" "$APP_DIR/node-red-anchor-light-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json" "$APP_DIR/node-red-ac-power-flow.json"
 rm -rf "$STAGE"
 
 # Remove obsolete packaging files from earlier installer revisions.
@@ -278,7 +280,7 @@ try:
         json.dump(flows, f, indent=2)
 except Exception as e:
     sys.exit(1)
-" "$candidate_flow" "$APP_DIR/node-red-anchor-light-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json" 2>/dev/null; then
+" "$candidate_flow" "$APP_DIR/node-red-anchor-light-flow.json" "$APP_DIR/node-red-bilge-alarms-flow.json" "$APP_DIR/node-red-ac-power-flow.json" 2>/dev/null; then
             chown nodered:nodered "$candidate_flow" 2>/dev/null || true
             chmod 644 "$candidate_flow" 2>/dev/null || true
             nodered_status="installed to $candidate_flow"
