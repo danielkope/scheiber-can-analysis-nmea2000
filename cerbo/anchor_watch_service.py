@@ -1036,6 +1036,7 @@ class AnchorWatchService:
     def build_quick_menu(self):
         deck_state = self.get_scheiber_switch(self.config.get("deck_light_channel", "deck_floodlight"))
         deck_btn_text = "💡 Deck Lights (ON)" if deck_state == 1 else "💡 Deck Lights (OFF)"
+        map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
         return {
             "inline_keyboard": [
                 [
@@ -1055,6 +1056,7 @@ class AnchorWatchService:
                     {"text": deck_btn_text, "callback_data": "toggle_deck"}
                 ],
                 [
+                    {"text": "📍 Open in Google Maps", "url": map_url},
                     {"text": "❌ Disarm Alarm", "callback_data": "disarm"}
                 ]
             ]
@@ -1085,10 +1087,11 @@ class AnchorWatchService:
             f"• <b>Alarm Radius:</b> {self.alarm_radius_m:.0f} m\n"
             f"• <b>True Wind:</b> {wind_str}\n"
             f"• <b>Water Depth:</b> {depth_str}\n"
-            f"• <b>Boat Position:</b> {self.current_lat or 0:.5f}°, {self.current_lon or 0:.5f}°\n"
+            f"• <b>Boat Position:</b> <code>{self.current_lat or 0:.5f}°, {self.current_lon or 0:.5f}°</code>\n"
             f"• <b>SOG / Heading:</b> {self.current_sog:.1f} kn / {self.current_heading:.0f}°\n"
             f"• <b>House Battery:</b> {self.current_soc or 0:.0f}% SoC\n\n"
-            f"<a href='{map_url}'>🗺️ View Vessel on Map</a>"
+            f"📍 <a href='{map_url}'><b>Open Live Position in Google Maps</b></a>\n"
+            f"🔗 {map_url}"
         )
         return msg
 
@@ -1107,12 +1110,15 @@ class AnchorWatchService:
                 ok, res = self.reset_to_heading(dist, rad)
                 if ok:
                     lat, lon, d, r, hdg = res
+                    map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
                     msg = (
                         f"🔄 <b>Anchor Point Reset to Heading!</b>\n\n"
                         f"• <b>Heading:</b> {hdg:.0f}°\n"
                         f"• <b>Chain Distance:</b> {d:.0f} m\n"
                         f"• <b>Alarm Radius:</b> {r:.0f} m\n"
-                        f"• <b>New Anchor GPS:</b> {lat:.5f}°, {lon:.5f}°"
+                        f"• <b>New Anchor GPS:</b> <code>{lat:.5f}°, {lon:.5f}°</code>\n\n"
+                        f"📍 <a href='{map_url}'>Open Google Maps</a>\n"
+                        f"🔗 {map_url}"
                     )
                     png = self.render_map()
                     if png:
@@ -1140,12 +1146,15 @@ class AnchorWatchService:
             ok, res = self.reset_to_heading()
             if ok:
                 lat, lon, d, r, hdg = res
+                map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
                 msg = (
                     f"⚓ <b>Anchor Dropped & Watch Armed!</b>\n\n"
                     f"• <b>Bow Heading:</b> {hdg:.0f}°\n"
                     f"• <b>Chain Rode:</b> {d:.0f} m ahead\n"
                     f"• <b>Safe Alarm Radius:</b> {r:.0f} m\n"
-                    f"• <b>Anchor GPS:</b> <code>{lat:.5f}°, {lon:.5f}°</code>"
+                    f"• <b>Anchor GPS:</b> <code>{lat:.5f}°, {lon:.5f}°</code>\n\n"
+                    f"📍 <a href='{map_url}'><b>Open Live Position in Google Maps</b></a>\n"
+                    f"🔗 {map_url}"
                 )
                 png = self.render_map()
                 if png:
@@ -1159,12 +1168,15 @@ class AnchorWatchService:
             ok, res = self.reset_to_heading()
             if ok:
                 lat, lon, d, r, hdg = res
+                map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
                 msg = (
                     f"🔄 <b>Anchor Point Re-centered!</b>\n\n"
                     f"• <b>Bow Heading:</b> {hdg:.0f}°\n"
                     f"• <b>Chain Rode:</b> {d:.0f} m ahead\n"
                     f"• <b>Safe Alarm Radius:</b> {r:.0f} m\n"
-                    f"• <b>Anchor GPS:</b> <code>{lat:.5f}°, {lon:.5f}°</code>"
+                    f"• <b>Anchor GPS:</b> <code>{lat:.5f}°, {lon:.5f}°</code>\n\n"
+                    f"📍 <a href='{map_url}'><b>Open Live Position in Google Maps</b></a>\n"
+                    f"🔗 {map_url}"
                 )
                 png = self.render_map()
                 if png:
