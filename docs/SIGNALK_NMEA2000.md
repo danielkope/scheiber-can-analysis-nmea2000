@@ -289,17 +289,40 @@ Field photographs and Cerbo screenshots are kept in [`INTEGRATION_RESULTS.md`](I
 
 ## Troubleshooting Decision Tree & Runbook Checklist
 
-### Incident Post-Mortem: CAN Port Remapping & N2K Gateway Output
+### Incident Post-Mortem: Core NMEA 2000 & B&G Zeus3 Integration Discoveries
 
-During testing, two distinct issues caused tank and SmartShunt data to disappear from the B&G Zeus3 chartplotter:
+During engineering and testing, three critical root causes were identified and resolved:
 
-1. **CAN Interface Assignment**:
-   - `can0` is the USB-CAN adapter (`gs_usb`, Scheiber bus).
-   - `can1` is the built-in VE.Can / NMEA 2000 port (`sun4i_can`, vessel N2K backbone).
-   - Signal K's provider was defaulting to `can0` instead of `can1`.
-2. **Victron VE.Can Gateway Output Disabled on `can1`**:
-   - Victron's native VE.Can setting had `Vecan/can0/N2kGatewayEnabled = 1` and `Vecan/can1/N2kGatewayEnabled = 0`.
-   - As a result, Victron was exporting the SmartShunt (`PGN 127506/127508`), Solar Chargers, and Inverters to the Scheiber bus (`can0`) and disabling all output to the actual N2K network (`can1`).
+#### 1. The "Unknown Tank" Root Cause (Tank Instance Mismatch)
+* **Symptom**: The B&G Zeus3 displayed `Scheiber Tank Sensor 501.7 Unknown Tank` and `501.8 Unknown Tank`.
+* **Root Cause**: 
+  - Venus OS's `vecan-dbus` assigned arbitrary high instance numbers (`6`, `7`, `8`) in `/Settings/Vecan/can1/Forward/tank/{N}/FluidInstance0`.
+  - Navico NOS (B&G Zeus3 / Simrad) firmware strictly expects:
+    - **Fresh Water**: `FluidType = 1` (Water), **`FluidInstance = 0`** &rarr; Mapped to standard Water Gauge.
+    - **Port / Main Fuel**: `FluidType = 0` (Fuel), **`FluidInstance = 0`** &rarr; Mapped to Port Fuel Gauge.
+    - **Starboard / Aux Fuel**: `FluidType = 0` (Fuel), **`FluidInstance = 1`** &rarr; Mapped to Starboard Fuel Gauge.
+  - When the Zeus3 received Fluid Instance `7` or `8`, it fell back to unassigned `"Unknown Tank"`.
+* **Resolution**: Configured `/Settings/Vecan/can1/Forward/tank/` with `FluidInstance0 = 0` (Fresh Water), `FluidInstance0 = 0` (Port Diesel), and `FluidInstance0 = 1` (Starboard Diesel), plus explicit `Description2` installation strings (`Fresh Water`, `Port Diesel`, `Starboard Diesel`).
+
+#### 2. The Digital Switching Visibility Root Cause (CAN Priority 3 Filter)
+* **Symptom**: The Zeus3 Digital Switching menu showed internal Autopilot and SmartShunt relays but failed to discover the Scheiber 15-channel switch bank.
+* **Root Cause**:
+  - The NMEA 2000 standard defines default priority **`3`** (`0x0DF20Dxx`) for **`PGN 127501` (Binary Status Report)**.
+  - The bridge was initially transmitting with priority `6` (`0x19F20Dxx`).
+  - Navico B&G Zeus3 hardware CAN reception filters specifically accept only Priority 3 frames for binary switch banks, silently discarding lower-priority broadcasts.
+* **Resolution**: Updated `cerbo/nmea2000_bridge.py` to construct CAN IDs using Priority 3: `can_id = (3 << 26) | (0x1F20D << 8) | self.addr` (`0x0DF20D69`).
+
+#### 3. The 64-bit NAME Device Class Requirement
+* **Symptom**: The switch gateway was categorized near steering/autopilot devices.
+* **Root Cause**: The bridge used Device Class `60` (Propulsion/Navigation).
+* **Resolution**: Updated the ISO 64-bit NAME register to official N2K **Device Class `30` (Electrical Distribution)** and **Device Function `140` (Load Controller / Binary Switch Bank)** with full **PGN 126996/126998 Fast-Packet product info** responses.
+
+#### 4. The VE.Can N2K Gateway Port Mapping
+* **Symptom**: SmartShunt DC Detailed Status (`PGN 127506`), SoC, Solar MPPT, and Inverter data vanished from the vessel network.
+* **Root Cause**: Victron settings had `Vecan/can0/N2kGatewayEnabled = 1` (exporting to the isolated Scheiber bus) and `Vecan/can1/N2kGatewayEnabled = 0` (disabled on the actual vessel N2K backbone).
+* **Resolution**: Enforced `Vecan/can1/N2kGatewayEnabled = 1` and `Vecan/can0/N2kGatewayEnabled = 0` in `install.sh` and `/data/rc.local`.
+
+---
 
 ### Quick Inspection Runbook (If CAN Ports Remap Again)
 

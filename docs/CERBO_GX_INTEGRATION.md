@@ -19,8 +19,8 @@ Canonical runtime source:
 
 ```text
 cerbo/bridge.py
-version 5.9.0
-SHA-256 f3fecabfb42530c2fc9dc3007fbd0036092a33e4e10a57adc2242a0efd45f3bc
+version 5.10.0
+SHA-256 2a1a74abc3949d56d1a88cff6166b22afa11720e85c8c92cd68a1bcda1f1c45e
 ```
 
 The bridge publishes:
