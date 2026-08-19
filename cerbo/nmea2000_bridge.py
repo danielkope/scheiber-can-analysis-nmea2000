@@ -2,8 +2,9 @@
 """Scheiber NMEA 2000 Gateway Bridge for Victron Cerbo GX.
 
 Publishes:
-  1. PGN 127508 (Battery Status) for Port Starter, Starboard Starter, and Generator Starter batteries.
-  2. PGN 127501 (Binary Switch Bank Status) for all 15 Scheiber Multibloc V8 switch channels.
+  1. PGN 127505 (Fluid Level) for Fresh Water (Inst 0, Water), Diesel 1 (Inst 0, Fuel), Diesel 2 (Inst 1, Fuel).
+  2. PGN 127508 (Battery Status) for Port Starter, Starboard Starter, and Generator Starter batteries.
+  3. PGN 127501 (Binary Switch Bank Status) for all 15 Scheiber Multibloc V8 switch channels.
 Consumes:
   1. PGN 127502 (Binary Switch Bank Control) from B&G Zeus3 chartplotter and updates D-Bus switch states.
 """
@@ -23,7 +24,16 @@ DEVICE_CLASS = 60        # Electrical Distribution
 SYSTEM_INSTANCE = 0
 INDUSTRY_GROUP = 4       # Marine
 
-# Battery definitions to publish as PGN 127508
+# Tank definitions to publish as PGN 127505 (Fluid Level)
+# (fluid_instance, fluid_type, dbus_service, name)
+# Fluid types: 0 = Fuel/Diesel, 1 = Fresh Water, 2 = Waste Water, 5 = Black Water
+TANK_PGN_DEFS = [
+    (0, 1, "com.victronenergy.tank.scheiber_fresh", "Fresh Water Tank"),
+    (0, 0, "com.victronenergy.tank.scheiber_diesel1", "Diesel Tank 1 (Port)"),
+    (1, 0, "com.victronenergy.tank.scheiber_diesel2", "Diesel Tank 2 (Starboard)"),
+]
+
+# Battery definitions to publish as PGN 127508 (Battery Status)
 BATTERY_PGN_DEFS = [
     # instance, dbus_service, name
     (0, "com.victronenergy.battery.scheiber_engine_port", "Port Engine Starter"),
@@ -45,6 +55,29 @@ def build_name_u64(uniq_id, mfg_code, dev_inst, dev_func, dev_class, sys_inst, i
     name |= ((ind_grp & 0x07) << 60)
     name |= (1 << 63)  # Arbitrary Address Capable
     return name
+
+
+def encode_pgn127505_fluid_level(fluid_inst, fluid_type, level_pct, capacity_m3=None):
+    """Encode standard NMEA 2000 PGN 127505 (Fluid Level).
+    
+    Byte 0: (fluid_inst << 4) | (fluid_type & 0x0F)
+    Bytes 1-2: Level (uint16 LE, 0.004 % per bit, 0..25000 -> 0..100.0%)
+    Bytes 3-6: Capacity (uint32 LE, 0.1 L per bit / 0.0001 m3 per bit, 0xFFFFFFFF = unknown)
+    Byte 7: Reserved (0xFF)
+    """
+    byte0 = ((int(fluid_inst) & 0x0F) << 4) | (int(fluid_type) & 0x0F)
+    
+    # Level: 0.004% per bit (level_pct * 250)
+    l_clamped = max(0.0, min(100.0, float(level_pct)))
+    l_raw = int(round(l_clamped * 250.0))
+    
+    # Capacity: 0.1 L per bit (m3 * 10000)
+    if capacity_m3 is not None and float(capacity_m3) > 0.0:
+        c_raw = int(round(float(capacity_m3) * 10000.0))
+    else:
+        c_raw = 0xFFFFFFFF
+        
+    return struct.pack("<BHI B", byte0, l_raw, c_raw, 0xFF)
 
 
 def encode_pgn127508_battery(inst, voltage_v, seq_id=0):
@@ -124,6 +157,7 @@ class Nmea2000Bridge:
         self.name_bytes = struct.pack("<Q", self.name_u64)
         
         self.switch_states = [0] * NUM_SWITCH_CHANNELS
+        self.last_tank_pub = 0.0
         self.last_battery_pub = 0.0
         self.last_switch_pub = 0.0
         self.seq_id = 0
@@ -133,7 +167,7 @@ class Nmea2000Bridge:
         self.init_dbus_watch()
         
         self.GLib.io_add_watch(self.sock.fileno(), self.GLib.IO_IN, self.on_can_frame)
-        self.GLib.timeout_add(1000, self.timer_tick)
+        self.GLib.timeout_add(500, self.timer_tick)
         print(f"[N2K Bridge] Initialized on {self.iface} with preferred address {self.addr}", flush=True)
 
     def init_socket(self):
@@ -200,6 +234,26 @@ class Nmea2000Bridge:
                         print(f"[N2K Bridge] Switch channel {ch} changed to {new_val}; publishing PGN 127501", flush=True)
                         self.publish_switch_bank_status()
 
+    def publish_tank_status(self):
+        """Publish PGN 127505 (Fluid Level) for Fresh Water and Diesel tanks."""
+        for fluid_inst, fluid_type, service_name, name in TANK_PGN_DEFS:
+            try:
+                obj = self.bus.get_object(service_name, "/Level")
+                lvl = obj.GetValue(dbus_interface="com.victronenergy.BusItem")
+                if lvl is not None:
+                    cap = None
+                    try:
+                        obj_cap = self.bus.get_object(service_name, "/Capacity")
+                        cap = obj_cap.GetValue(dbus_interface="com.victronenergy.BusItem")
+                    except Exception:
+                        pass
+                    payload = encode_pgn127505_fluid_level(fluid_inst, fluid_type, float(lvl), cap)
+                    # PGN 127505 (0x1F211): Priority 6, Broadcast -> 0x19F211xx
+                    can_id = (6 << 26) | (0x1F211 << 8) | self.addr
+                    self.send_can_frame(can_id, payload)
+            except Exception:
+                pass
+
     def publish_battery_status(self):
         """Publish PGN 127508 (Battery Status) for each starter battery."""
         for inst, service_name, name in BATTERY_PGN_DEFS:
@@ -265,16 +319,20 @@ class Nmea2000Bridge:
                         self.claim_address()
                     elif req_pgn == 127501:
                         self.publish_switch_bank_status()
+                    elif req_pgn == 127505:
+                        self.publish_tank_status()
+                    elif req_pgn == 127508:
+                        self.publish_battery_status()
                         
             # ISO Address Claim Conflict Check (PGN 60928 - 0xEE00)
             elif pgn == 60928 and src == self.addr:
                 if payload[:8] == self.name_bytes:
-                    return True  # Ignore our own looped back frame
+                    return True
                 remote_name = struct.unpack("<Q", payload[:8])[0]
                 if remote_name < self.name_u64:
                     self.addr = (self.addr + 1) if self.addr < 250 else 100
                     print(f"[N2K Bridge] Address conflict with 0x{remote_name:016X}; changing address to {self.addr}", flush=True)
-                    self.claim_address()
+                    self.claim_address(verbose=True)
                     
             # PGN 127502 (Binary Switch Bank Control - 0x1F20E)
             elif pgn == 127502 and (dest == self.addr or dest == 0xFF):
@@ -286,10 +344,18 @@ class Nmea2000Bridge:
 
     def timer_tick(self):
         now = time.monotonic()
+        
+        # Publish tanks every 2.0s (0.5 Hz)
+        if now - self.last_tank_pub >= 2.0:
+            self.publish_tank_status()
+            self.last_tank_pub = now
+            
+        # Publish batteries every 1.0s (1.0 Hz)
         if now - self.last_battery_pub >= 1.0:
             self.publish_battery_status()
             self.last_battery_pub = now
             
+        # Publish switch bank status every 1.0s (1.0 Hz)
         if now - self.last_switch_pub >= 1.0:
             self.publish_switch_bank_status()
             self.last_switch_pub = now
