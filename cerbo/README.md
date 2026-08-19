@@ -1,125 +1,199 @@
-# Cerbo GX bridge package
+# Cerbo GX integration package
 
-This directory contains the optional active Victron integration. The passive analyzer elsewhere in the repository remains read-only.
+This directory contains the active Venus OS integration for the Scheiber
+Multibloc V8 network. The passive analysis tools elsewhere in the repository
+remain read-only.
 
-## Canonical source
+The installer deploys two independent runit services that share the same
+SocketCAN interface:
 
-The complete production bridge is checked in directly as:
+| Service | D-Bus service | Purpose |
+|---|---|---|
+| `scheiber-gx` | `com.victronenergy.genset.scheiber` plus tank/battery services | Existing field-tested generator and telemetry bridge |
+| `scheiber-switch` | `com.victronenergy.switch.scheiber` | Native GX switchboard controls and pump-running feedback |
+
+Keeping the switch service separate avoids destabilising the generator bridge
+while the newly decoded control-panel path is field-validated.
+
+## Native GX switchboard
+
+The switch service publishes ten logical controls:
+
+- Electronics
+- Deck Floodlight
+- Navigation Lights
+- Anchor Light
+- Steaming Light
+- Port Bilge Pump
+- Starboard Bilge Pump
+- Fresh Water Pump
+- Fridge Unit
+- General Lighting
+
+Anchor Light and both bilges use the native three-state GX control.
+
+For each bilge the physical modes are:
 
 ```text
-cerbo/bridge.py
+OFF     AUTO=0  MANUAL=0
+AUTO    AUTO=1  MANUAL=0
+MANUAL  AUTO=1  MANUAL=1
 ```
 
-There is no generated or encoded runtime source and no install-time patching. Review `bridge.py` directly; the installer copies that exact file to the Cerbo after compiling it and verifying its SHA-256.
-
-Current bridge version:
+The GX row presents **OFF / AUTO / ON**, where `ON` is Scheiber MANUAL/forced
+pumping. The ON segment also acts as the physical pump-activity lamp:
 
 ```text
-5.4.2
+OFF, stopped       Off
+AUTO, idle         Auto
+AUTO, pumping      Auto + On
+MANUAL             On
 ```
 
-Current `cerbo/bridge.py` SHA-256:
+Actual activity comes from `0x02141808`, not from the selected mode. It is also
+published as a separate read-only activity card for each bilge.
+
+Fresh Water Pump is a simple **OFF / ON** enable. When ON, the existing pressure
+switch automatically starts the motor as taps are opened. A separate activity
+card displays `Standby` or `ACTIVE` from `0x02141808` bit 0.
+
+The service never assumes an output is OFF. At startup every physical state is
+`UNKNOWN`; the service listens for the six paired state frames and issues CAN
+RTR state requests. Writes are rejected until the relevant state is known.
+
+The physical keys are momentary events rather than explicit ON/OFF commands. A
+requested state is implemented by comparing desired state with synchronized CAN
+feedback, transmitting one captured-style `0x04001808` press/release pair, and
+waiting for authoritative output-state feedback. No direct `CMD_S_TOR` output
+forcing is used, so Scheiber interlocks remain authoritative.
+
+## Stable USB-CAN discovery
+
+The Linux name assigned to the candleLight/`gs_usb` adapter is not stable. The
+same physical adapter may be `can0`, `can1`, or `can2` after a reboot. The
+integration therefore does not persist a boot-specific `canN` name by default.
+
+`resolve_can_interface.py` discovers the current interface using:
+
+1. driver `gs_usb`;
+2. exact USB serial number when configured;
+3. optional USB vendor/product IDs;
+4. a fail-closed rule if more than one device matches.
+
+The main service is the single owner of discovery and CAN configuration. After
+bringing the interface up, it atomically publishes the selected name to:
+
+```text
+/run/scheiber-can-if
+```
+
+The switch service waits for that file and uses the same interface. It never
+independently guesses a device.
+
+Observed adapter identity on this vessel:
+
+```text
+driver:       gs_usb
+USB VID:PID:  1d50:606f
+USB serial:   0025003C5457530220383638
+```
+
+The native Cerbo CAN controller is `sun4i_can` and is deliberately excluded
+from automatic `gs_usb` selection.
+
+## Canonical runtime files
+
+```text
+cerbo/bridge.py                     existing generator/telemetry bridge
+cerbo/resolve_can_interface.py      stable USB-CAN identity resolver
+cerbo/scheiber_switch_protocol.py   pure switch protocol and state planner
+cerbo/switch_service.py             native D-Bus/SocketCAN switch service
+cerbo/service/run                   telemetry runit wrapper and CAN owner
+cerbo/service-switch/run            switch-service runit wrapper
+cerbo/install.sh                    transactional installer/updater
+cerbo/uninstall.sh                  disables both services
+```
+
+The existing generator bridge remains version `5.4.2`, with canonical SHA-256:
 
 ```text
 6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
 ```
 
-Bridge 5.4.2 is the field-tested 5.4.1 generator integration with the tank D-Bus unit correction applied directly in the source. Generator START/STOP CAN semantics and manager-recovery behavior are unchanged.
+## Fresh installation or update with curl
 
-## Tank D-Bus units
+SSH to the Cerbo as `root`. For a pinned PR/commit build:
 
-Vessel capacities remain configured in litres for readability:
-
-```text
-Fresh water:   600 L
-Diesel tank 1: 500 L
-Diesel tank 2: 500 L
-```
-
-Victron D-Bus uses cubic metres for `/Capacity` and `/Remaining`, so `bridge.py` publishes:
-
-```text
-Fresh water capacity:   0.600 m3
-Diesel tank 1 capacity: 0.500 m3
-Diesel tank 2 capacity: 0.500 m3
-```
-
-`/Remaining` is calculated from the cubic-metre capacity and `/Level` percentage. The D-Bus text formatter still presents the volume in litres for a human-readable GX display.
-
-## Fresh installation on a Cerbo GX
-
-SSH to the Cerbo as `root` and run:
-
-```bash
+```sh
 mkdir -p /data/scheiber-gx-installer
 cd /data/scheiber-gx-installer
 
-wget -O install.sh \
-  https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo/install.sh
-chmod +x install.sh
+REF="<commit-sha>"
+RAW_BASE="https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/${REF}/cerbo"
 
-CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
+curl -fL "${RAW_BASE}/install.sh" -o install.sh
+chmod 755 install.sh
+
+CAN_IF=auto \
+CAN_USB_SERIAL=0025003C5457530220383638 \
+CAN_USB_VENDOR_ID=1d50 \
+CAN_USB_PRODUCT_ID=606f \
+CAN_BITRATE=250000 \
+SWITCH_TX_ENABLED=1 \
+SWITCH_RTR_ENABLED=1 \
+RAW_BASE="${RAW_BASE}" \
+./install.sh
 ```
 
-The installer downloads the complete canonical `cerbo/bridge.py` and `cerbo/service/run` from the repository, validates the Python source and pinned checksum, installs them under `/data/scheiber-gx`, creates/persists the runit service link, and starts the service.
+`CAN_IF=auto` is preferred. If exactly one `gs_usb` device is connected and no
+serial is supplied, the installer auto-enrols its USB serial. Pinning the serial
+is still recommended because it remains unambiguous if another USB-CAN adapter
+is added later.
 
-## Update an existing installation
+An explicit interface such as `CAN_IF=can0` is supported for diagnostics, but
+it reintroduces boot-order dependence and should not be the normal vessel
+configuration.
 
-Use the **same installer**. Re-download `install.sh` first so an older local installer cannot retain obsolete packaging logic:
+`SWITCH_TX_ENABLED=1` enables active panel-key CAN commands. Set it to `0` for
+receive-only UI validation. `SWITCH_RTR_ENABLED=1` permits startup state-query
+frames.
 
-```bash
-cd /data/scheiber-gx-installer
+The installer stages and compiles all Python sources, validates the pinned
+bridge hash, replaces the runtime files, persists the selector and USB identity,
+and starts both runit services. A failed fetch, compile, or checksum happens
+before the live files are replaced.
 
-wget -O install.sh \
-  https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo/install.sh
-chmod +x install.sh
+## Verify the services
 
-CAN_IF=can2 CAN_BITRATE=250000 ./install.sh
+```sh
+cat /run/scheiber-can-if
+ip -details -statistics link show "$(cat /run/scheiber-can-if)"
+sv status /service/scheiber-gx /service/scheiber-switch
+
+tail -n 100 /data/scheiber-gx/bridge.log
+tail -n 100 /data/scheiber-gx/switch.log
+
+dbus -y com.victronenergy.switch.scheiber /Connected GetValue
+dbus -y com.victronenergy.switch.scheiber \
+  /Scheiber/SynchronizedOutputCount GetValue
+dbus -y com.victronenergy.switch.scheiber \
+  /SwitchableOutput/deck_floodlight/State GetValue
+dbus -y com.victronenergy.switch.scheiber \
+  /GenericInput/bilge_port_running/Value GetValue
 ```
 
-For an update, the installer:
-
-1. downloads the entire current `cerbo/bridge.py` to a temporary file;
-2. compiles it with `python3 -m py_compile`;
-3. verifies the pinned SHA-256;
-4. downloads the runit `service/run` wrapper;
-5. backs up the installed runtime as `/data/scheiber-gx/bridge.py.previous`;
-6. replaces `/data/scheiber-gx/bridge.py` with the complete verified repository script;
-7. restarts `/service/scheiber-gx` using `svc`.
-
-A failed download, compile, or checksum occurs before the installed bridge is replaced.
-
-## Install from a checked-out repository
-
-If the repository has already been cloned/copied to the Cerbo:
-
-```bash
-cd /path/to/scheiber-can-analysis-nmea2000
-CAN_IF=can2 CAN_BITRATE=250000 ./cerbo/install.sh
-```
-
-The installer uses the local `cerbo/bridge.py` and `cerbo/service/run` when they are present.
-
-## Verify the installed runtime
-
-```bash
-sha256sum /data/scheiber-gx/bridge.py
-head -n 10 /data/scheiber-gx/bridge.py
-
-tail -n 80 /data/scheiber-gx/bridge.log
-
-dbus -y com.victronenergy.genset.scheiber /Connected GetValue
-```
-
-For bridge 5.4.2, the expected SHA-256 is:
+The expected synchronized output count is `12`. The current switch-service
+snapshot is written to:
 
 ```text
-6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097
+/data/scheiber-gx/switch-status.json
 ```
 
-## Verify the corrected tank units
+## Existing generator and tank verification
 
-```bash
+```sh
+dbus -y com.victronenergy.genset.scheiber /Connected GetValue
+
 for s in \
   com.victronenergy.tank.scheiber_fresh \
   com.victronenergy.tank.scheiber_diesel1 \
@@ -133,18 +207,10 @@ do
 done
 ```
 
-Example live values after the unit fix:
+The tank services publish Victron D-Bus volume values in cubic metres while the
+text formatter presents litres. Signal K/NMEA 2000 guidance remains in
+[`../docs/SIGNALK_NMEA2000.md`](../docs/SIGNALK_NMEA2000.md).
 
-```text
-Fresh:    Level 74  Capacity 0.600  Remaining 0.444
-Diesel 1: Level 63  Capacity 0.500  Remaining 0.315
-Diesel 2: Level 79  Capacity 0.500  Remaining 0.395
-```
-
-## Signal K / NMEA 2000
-
-When Signal K is installed on the Cerbo, the native Victron tank services are visible through the Venus integration and can be forwarded to the vessel NMEA 2000 network using the standard `signalk-to-nmea2000` plugin.
-
-The three tanks have been live-validated as PGN 127505 Fluid Level on the Cerbo VE.Can/NMEA 2000 connection. See [`../docs/SIGNALK_NMEA2000.md`](../docs/SIGNALK_NMEA2000.md) for the current instance mapping, loopback verification, and B&G Zeus3 display guidance.
-
-Read [`../docs/CERBO_GX_INTEGRATION.md`](../docs/CERBO_GX_INTEGRATION.md) for wiring, D-Bus architecture, generator lifecycle, diagnostics, rollback, and the post-stop `OFF_IDLE` restart caveat.
+Read [`../docs/SWITCH_SERVICE_HANDOVER.md`](../docs/SWITCH_SERVICE_HANDOVER.md)
+for the architecture, safety rules, field evidence, rollback procedure, and
+future Node-RED alarm/automation plan.

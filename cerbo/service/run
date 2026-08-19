@@ -4,27 +4,62 @@ exec 2>&1
 
 APP_DIR="${APP_DIR:-/data/scheiber-gx}"
 BRIDGE="${BRIDGE:-$APP_DIR/bridge.py}"
+RESOLVER="${RESOLVER:-$APP_DIR/resolve_can_interface.py}"
+RUNTIME_CAN_FILE="${RUNTIME_CAN_FILE:-/run/scheiber-can-if}"
 
 saved_can_if=""
 saved_bitrate=""
+saved_usb_serial=""
+saved_vendor_id=""
+saved_product_id=""
 [ -r "$APP_DIR/CAN_INTERFACE" ] && saved_can_if="$(cat "$APP_DIR/CAN_INTERFACE")"
 [ -r "$APP_DIR/CAN_BITRATE" ] && saved_bitrate="$(cat "$APP_DIR/CAN_BITRATE")"
-CAN_IF="${CAN_IF:-${saved_can_if:-can2}}"
+[ -r "$APP_DIR/CAN_USB_SERIAL" ] && saved_usb_serial="$(cat "$APP_DIR/CAN_USB_SERIAL")"
+[ -r "$APP_DIR/CAN_USB_VENDOR_ID" ] && saved_vendor_id="$(cat "$APP_DIR/CAN_USB_VENDOR_ID")"
+[ -r "$APP_DIR/CAN_USB_PRODUCT_ID" ] && saved_product_id="$(cat "$APP_DIR/CAN_USB_PRODUCT_ID")"
+
+CAN_SELECTOR="${CAN_IF:-${saved_can_if:-auto}}"
 CAN_BITRATE="${CAN_BITRATE:-${saved_bitrate:-250000}}"
+CAN_USB_SERIAL="${CAN_USB_SERIAL:-$saved_usb_serial}"
+CAN_USB_VENDOR_ID="${CAN_USB_VENDOR_ID:-$saved_vendor_id}"
+CAN_USB_PRODUCT_ID="${CAN_USB_PRODUCT_ID:-$saved_product_id}"
 
 modprobe can 2>/dev/null || true
 modprobe can_raw 2>/dev/null || true
 modprobe gs_usb 2>/dev/null || true
 
-if ! ip link show "$CAN_IF" >/dev/null 2>&1; then
-    echo "scheiber-gx: CAN interface $CAN_IF does not exist; retrying via runit"
+if [ ! -r "$RESOLVER" ]; then
+    echo "scheiber-gx: CAN resolver is missing: $RESOLVER"
     sleep 2
     exit 1
 fi
 
-if ! ip -details link show "$CAN_IF" 2>/dev/null | grep -q "bitrate $CAN_BITRATE"; then
+rm -f "$RUNTIME_CAN_FILE"
+if ! CAN_IF="$(
+    python3 "$RESOLVER" \
+        --interface "$CAN_SELECTOR" \
+        --usb-serial "$CAN_USB_SERIAL" \
+        --vendor-id "$CAN_USB_VENDOR_ID" \
+        --product-id "$CAN_USB_PRODUCT_ID"
+)"; then
+    echo "scheiber-gx: could not resolve the Scheiber CAN adapter; retrying via runit"
+    sleep 2
+    exit 1
+fi
+
+echo "scheiber-gx: selected $CAN_IF (selector=$CAN_SELECTOR, serial=${CAN_USB_SERIAL:-auto})"
+
+if ! ip link show "$CAN_IF" >/dev/null 2>&1; then
+    echo "scheiber-gx: resolved CAN interface $CAN_IF does not exist; retrying via runit"
+    sleep 2
+    exit 1
+fi
+
+can_details="$(ip -details link show "$CAN_IF" 2>/dev/null || true)"
+if ! printf '%s\n' "$can_details" | grep -q "bitrate $CAN_BITRATE"; then
     ip link set "$CAN_IF" down 2>/dev/null || true
-    if ! ip link set "$CAN_IF" type can bitrate "$CAN_BITRATE" restart-ms 100; then
+    if ! ip link set "$CAN_IF" type can bitrate "$CAN_BITRATE" restart-ms 100 2>/dev/null \
+        && ! ip link set "$CAN_IF" type can bitrate "$CAN_BITRATE"; then
         echo "scheiber-gx: failed to configure $CAN_IF at $CAN_BITRATE bit/s"
         sleep 2
         exit 1
@@ -36,6 +71,10 @@ if ! ip link set "$CAN_IF" up; then
     sleep 2
     exit 1
 fi
+
+runtime_tmp="${RUNTIME_CAN_FILE}.$$"
+printf '%s\n' "$CAN_IF" > "$runtime_tmp"
+mv "$runtime_tmp" "$RUNTIME_CAN_FILE"
 
 export CAN_IF
 exec python3 "$BRIDGE"

@@ -1,0 +1,51 @@
+#!/bin/sh
+# runit entrypoint for the native Scheiber SwitchableOutput service.
+exec 2>&1
+
+APP_DIR="${APP_DIR:-/data/scheiber-gx}"
+SERVICE_SCRIPT="${SERVICE_SCRIPT:-$APP_DIR/switch_service.py}"
+RUNTIME_CAN_FILE="${RUNTIME_CAN_FILE:-/run/scheiber-can-if}"
+
+saved_bitrate=""
+saved_tx=""
+saved_rtr=""
+[ -r "$APP_DIR/CAN_BITRATE" ] && saved_bitrate="$(cat "$APP_DIR/CAN_BITRATE")"
+[ -r "$APP_DIR/SWITCH_TX_ENABLED" ] && saved_tx="$(cat "$APP_DIR/SWITCH_TX_ENABLED")"
+[ -r "$APP_DIR/SWITCH_RTR_ENABLED" ] && saved_rtr="$(cat "$APP_DIR/SWITCH_RTR_ENABLED")"
+
+CAN_BITRATE="${CAN_BITRATE:-${saved_bitrate:-250000}}"
+SWITCH_TX_ENABLED="${SWITCH_TX_ENABLED:-${saved_tx:-1}}"
+SWITCH_RTR_ENABLED="${SWITCH_RTR_ENABLED:-${saved_rtr:-1}}"
+
+modprobe can 2>/dev/null || true
+modprobe can_raw 2>/dev/null || true
+modprobe gs_usb 2>/dev/null || true
+
+# scheiber-gx is the single owner of interface discovery and CAN setup. It
+# publishes the boot-specific canN name atomically under /run. This avoids the
+# two services independently selecting different adapters.
+attempt=0
+CAN_IF=""
+while [ "$attempt" -lt 30 ]; do
+    if [ -s "$RUNTIME_CAN_FILE" ]; then
+        candidate="$(cat "$RUNTIME_CAN_FILE" 2>/dev/null || true)"
+        if [ -n "$candidate" ] \
+            && ip link show "$candidate" >/dev/null 2>&1 \
+            && ip -details link show "$candidate" 2>/dev/null | grep -q "bitrate $CAN_BITRATE" \
+            && ip link show "$candidate" 2>/dev/null | grep -q "UP"; then
+            CAN_IF="$candidate"
+            break
+        fi
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+done
+
+if [ -z "$CAN_IF" ]; then
+    echo "scheiber-switch: no ready interface published in $RUNTIME_CAN_FILE; retrying via runit"
+    exit 1
+fi
+
+echo "scheiber-switch: using $CAN_IF published by scheiber-gx"
+export CAN_IF SWITCH_TX_ENABLED SWITCH_RTR_ENABLED
+exec python3 "$SERVICE_SCRIPT"

@@ -1,15 +1,24 @@
 #!/bin/sh
-# Install/update the Scheiber CAN <-> Victron bridge on Venus OS.
+# Install/update the Scheiber CAN <-> Victron bridge and native switch service.
 # Run as root on a Cerbo GX / Venus OS device.
 set -eu
 
 APP_DIR="${APP_DIR:-/data/scheiber-gx}"
 SERVICE_LINK="${SERVICE_LINK:-/service/scheiber-gx}"
-CAN_IF="${CAN_IF:-can2}"
+SWITCH_SERVICE_LINK="${SWITCH_SERVICE_LINK:-/service/scheiber-switch}"
+CAN_IF="${CAN_IF:-auto}"
 CAN_BITRATE="${CAN_BITRATE:-250000}"
+CAN_USB_SERIAL="${CAN_USB_SERIAL:-}"
+CAN_USB_VENDOR_ID="${CAN_USB_VENDOR_ID:-}"
+CAN_USB_PRODUCT_ID="${CAN_USB_PRODUCT_ID:-}"
+SWITCH_TX_ENABLED="${SWITCH_TX_ENABLED:-1}"
+SWITCH_RTR_ENABLED="${SWITCH_RTR_ENABLED:-1}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/danielkope/scheiber-can-analysis-nmea2000/main/cerbo}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 EXPECTED_BRIDGE_SHA256="6c25ce4b095385217564fc6bf6fdc843dfefd835993d643843811e7f0f737097"
+RC_LOCAL="${RC_LOCAL:-/data/rc.local}"
+MAIN_MARKER="# scheiber-gx persistent runit service"
+SWITCH_MARKER="# scheiber-switch persistent runit service"
 
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: run this installer as root." >&2
@@ -23,112 +32,250 @@ for cmd in python3 ip sha256sum ln chmod mkdir mv cp rm grep awk; do
     }
 done
 
-mkdir -p "$APP_DIR/service"
+case "$CAN_IF" in
+    ""|*[!A-Za-z0-9_.:-]*)
+        echo "ERROR: CAN_IF must be 'auto' or a valid interface name." >&2
+        exit 1
+        ;;
+esac
+case "$CAN_BITRATE" in
+    ""|*[!0-9]*) echo "ERROR: CAN_BITRATE must be numeric." >&2; exit 1 ;;
+esac
+case "$SWITCH_TX_ENABLED" in 0|1) ;; *) echo "ERROR: SWITCH_TX_ENABLED must be 0 or 1." >&2; exit 1 ;; esac
+case "$SWITCH_RTR_ENABLED" in 0|1) ;; *) echo "ERROR: SWITCH_RTR_ENABLED must be 0 or 1." >&2; exit 1 ;; esac
+
+mkdir -p "$APP_DIR/service" "$APP_DIR/service-switch" "$APP_DIR/.install-new"
+STAGE="$APP_DIR/.install-new"
+rm -f "$STAGE"/*
 
 fetch_file() {
     src_name="$1"
     dst="$2"
-
     if [ -f "$SELF_DIR/$src_name" ]; then
         cp "$SELF_DIR/$src_name" "$dst"
         return
     fi
-
     if command -v wget >/dev/null 2>&1; then
         wget -q -O "$dst" "$RAW_BASE/$src_name"
         return
     fi
-
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$RAW_BASE/$src_name" -o "$dst"
         return
     fi
-
     echo "ERROR: cannot obtain $src_name (no local copy, wget, or curl)." >&2
     exit 1
 }
 
-# Fetch and validate the complete canonical script before touching the running
-# installation. A failed download, compile, or checksum leaves the old bridge
-# in place.
-fetch_file "bridge.py" "$APP_DIR/bridge.py.new"
-python3 -m py_compile "$APP_DIR/bridge.py.new"
+# Fetch and validate every runtime file before replacing the installed service.
+fetch_file "bridge.py" "$STAGE/bridge.py"
+fetch_file "resolve_can_interface.py" "$STAGE/resolve_can_interface.py"
+fetch_file "service/run" "$STAGE/run-main"
+fetch_file "scheiber_switch_protocol.py" "$STAGE/scheiber_switch_protocol.py"
+fetch_file "switch_service.py" "$STAGE/switch_service.py"
+fetch_file "service-switch/run" "$STAGE/run-switch"
 
-actual_sha="$(sha256sum "$APP_DIR/bridge.py.new" | awk '{print $1}')"
-if [ "$actual_sha" != "$EXPECTED_BRIDGE_SHA256" ]; then
+python3 -m py_compile \
+    "$STAGE/bridge.py" \
+    "$STAGE/resolve_can_interface.py" \
+    "$STAGE/scheiber_switch_protocol.py" \
+    "$STAGE/switch_service.py"
+
+actual_bridge_sha="$(sha256sum "$STAGE/bridge.py" | awk '{print $1}')"
+if [ "$actual_bridge_sha" != "$EXPECTED_BRIDGE_SHA256" ]; then
     echo "ERROR: bridge.py SHA-256 mismatch." >&2
     echo "Expected: $EXPECTED_BRIDGE_SHA256" >&2
-    echo "Actual:   $actual_sha" >&2
-    rm -f "$APP_DIR/bridge.py.new"
+    echo "Actual:   $actual_bridge_sha" >&2
     exit 1
 fi
 
-fetch_file "service/run" "$APP_DIR/service/run.new"
+# Best-effort install-time discovery. The runit service repeats this operation
+# on every boot, so a temporarily disconnected adapter does not block updates.
+modprobe can 2>/dev/null || true
+modprobe can_raw 2>/dev/null || true
+modprobe gs_usb 2>/dev/null || true
+resolved_can_if=""
+if resolved_can_if="$(
+    python3 "$STAGE/resolve_can_interface.py" \
+        --interface "$CAN_IF" \
+        --usb-serial "$CAN_USB_SERIAL" \
+        --vendor-id "$CAN_USB_VENDOR_ID" \
+        --product-id "$CAN_USB_PRODUCT_ID"
+)"; then
+    if [ -z "$CAN_USB_SERIAL" ]; then
+        CAN_USB_SERIAL="$(
+            python3 "$STAGE/resolve_can_interface.py" \
+                --interface "$resolved_can_if" \
+                --field serial
+        )"
+        [ -z "$CAN_USB_SERIAL" ] || echo "Auto-enrolled CAN USB serial: $CAN_USB_SERIAL"
+    fi
+    if [ -z "$CAN_USB_VENDOR_ID" ]; then
+        CAN_USB_VENDOR_ID="$(
+            python3 "$STAGE/resolve_can_interface.py" \
+                --interface "$resolved_can_if" \
+                --field vendor
+        )"
+    fi
+    if [ -z "$CAN_USB_PRODUCT_ID" ]; then
+        CAN_USB_PRODUCT_ID="$(
+            python3 "$STAGE/resolve_can_interface.py" \
+                --interface "$resolved_can_if" \
+                --field product
+        )"
+    fi
+else
+    echo "WARNING: CAN adapter is not currently resolvable; runit will retry at boot." >&2
+fi
 
-# Only after validation succeeds do we back up and replace the installed files.
+# Refuse to replace unrelated runit entries.
+check_service_path() {
+    link="$1"
+    expected="$2"
+    if [ -L "$link" ]; then
+        target="$(readlink "$link" 2>/dev/null || true)"
+        [ "$target" = "$expected" ] || {
+            echo "ERROR: $link points to $target, not $expected; refusing to replace it." >&2
+            exit 1
+        }
+    elif [ -e "$link" ]; then
+        echo "ERROR: $link exists and is not a symlink; refusing to replace it." >&2
+        exit 1
+    fi
+}
+check_service_path "$SERVICE_LINK" "$APP_DIR/service"
+check_service_path "$SWITCH_SERVICE_LINK" "$APP_DIR/service-switch"
+
 install_mode="fresh"
 if [ -f "$APP_DIR/bridge.py" ]; then
     install_mode="update"
     cp "$APP_DIR/bridge.py" "$APP_DIR/bridge.py.previous"
 fi
-mv "$APP_DIR/bridge.py.new" "$APP_DIR/bridge.py"
-mv "$APP_DIR/service/run.new" "$APP_DIR/service/run"
-chmod 755 "$APP_DIR/bridge.py" "$APP_DIR/service/run"
+for file in resolve_can_interface.py scheiber_switch_protocol.py switch_service.py; do
+    [ ! -f "$APP_DIR/$file" ] || cp "$APP_DIR/$file" "$APP_DIR/$file.previous"
+done
 
-# Remove obsolete packaging files from earlier installer revisions. They are no
-# longer part of the runtime or installation path.
+mv "$STAGE/bridge.py" "$APP_DIR/bridge.py"
+mv "$STAGE/resolve_can_interface.py" "$APP_DIR/resolve_can_interface.py"
+mv "$STAGE/scheiber_switch_protocol.py" "$APP_DIR/scheiber_switch_protocol.py"
+mv "$STAGE/switch_service.py" "$APP_DIR/switch_service.py"
+mv "$STAGE/run-main" "$APP_DIR/service/run"
+mv "$STAGE/run-switch" "$APP_DIR/service-switch/run"
+chmod 755 \
+    "$APP_DIR/bridge.py" \
+    "$APP_DIR/resolve_can_interface.py" \
+    "$APP_DIR/switch_service.py" \
+    "$APP_DIR/service/run" \
+    "$APP_DIR/service-switch/run"
+chmod 644 "$APP_DIR/scheiber_switch_protocol.py"
+rm -rf "$STAGE"
+
+# Remove obsolete packaging files from earlier installer revisions.
 rm -f "$APP_DIR/assemble_bridge.py"
 rm -rf "$APP_DIR/source"
 
-echo "$CAN_IF" > "$APP_DIR/CAN_INTERFACE"
-echo "$CAN_BITRATE" > "$APP_DIR/CAN_BITRATE"
+# CAN_INTERFACE is a selector ('auto' is preferred), not necessarily the
+# boot-specific canN name. The resolved name is written to /run at service start.
+printf '%s\n' "$CAN_IF" > "$APP_DIR/CAN_INTERFACE"
+printf '%s\n' "$CAN_BITRATE" > "$APP_DIR/CAN_BITRATE"
+printf '%s\n' "$CAN_USB_SERIAL" > "$APP_DIR/CAN_USB_SERIAL"
+printf '%s\n' "$CAN_USB_VENDOR_ID" > "$APP_DIR/CAN_USB_VENDOR_ID"
+printf '%s\n' "$CAN_USB_PRODUCT_ID" > "$APP_DIR/CAN_USB_PRODUCT_ID"
+printf '%s\n' "$SWITCH_TX_ENABLED" > "$APP_DIR/SWITCH_TX_ENABLED"
+printf '%s\n' "$SWITCH_RTR_ENABLED" > "$APP_DIR/SWITCH_RTR_ENABLED"
 
-RC_LOCAL="/data/rc.local"
-MARKER="# scheiber-gx persistent runit service"
+# Install the persistent service links before the first `exit 0`. Older revisions appended the block after `exit 0`, which made it unreachable.
+# Remove any prior marker blocks wherever they occur, then insert one canonical
+# block immediately before the first exit. Preserve all unrelated rc.local
+# content and append the block if no exit statement exists.
 if [ ! -f "$RC_LOCAL" ]; then
-    printf '%s\n' '#!/bin/sh' > "$RC_LOCAL"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$RC_LOCAL"
 fi
-if ! grep -Fq "$MARKER" "$RC_LOCAL"; then
-    cat >> "$RC_LOCAL" <<'RC_EOF'
-# scheiber-gx persistent runit service
-[ -e /service/scheiber-gx ] || ln -s /data/scheiber-gx/service /service/scheiber-gx
-RC_EOF
-fi
+awk \
+    -v main_marker="$MAIN_MARKER" \
+    -v switch_marker="$SWITCH_MARKER" \
+    -v main_cmd='[ -e /service/scheiber-gx ] || ln -s /data/scheiber-gx/service /service/scheiber-gx' \
+    -v switch_cmd='[ -e /service/scheiber-switch ] || ln -s /data/scheiber-gx/service-switch /service/scheiber-switch' '
+    $0 == main_marker || $0 == switch_marker { skip_next=1; next }
+    skip_next { skip_next=0; next }
+    !inserted && $0 ~ /^[[:space:]]*exit[[:space:]]+0[[:space:]]*$/ {
+        print main_marker
+        print main_cmd
+        print switch_marker
+        print switch_cmd
+        inserted=1
+    }
+    { print }
+    END {
+        if (!inserted) {
+            print main_marker
+            print main_cmd
+            print switch_marker
+            print switch_cmd
+        }
+    }
+' "$RC_LOCAL" > "$RC_LOCAL.tmp"
+mv "$RC_LOCAL.tmp" "$RC_LOCAL"
 chmod 755 "$RC_LOCAL"
 
-if [ -L "$SERVICE_LINK" ]; then
-    target="$(readlink "$SERVICE_LINK" 2>/dev/null || true)"
-    if [ "$target" != "$APP_DIR/service" ]; then
-        rm -f "$SERVICE_LINK"
-    fi
-elif [ -e "$SERVICE_LINK" ]; then
-    echo "ERROR: $SERVICE_LINK exists and is not a symlink; refusing to replace it." >&2
-    exit 1
-fi
 [ -e "$SERVICE_LINK" ] || ln -s "$APP_DIR/service" "$SERVICE_LINK"
+[ -e "$SWITCH_SERVICE_LINK" ] || ln -s "$APP_DIR/service-switch" "$SWITCH_SERVICE_LINK"
 
-if command -v svc >/dev/null 2>&1; then
-    svc -d "$SERVICE_LINK" 2>/dev/null || true
-    sleep 1
-    svc -u "$SERVICE_LINK"
+# Venus OS commonly provides daemontools/runit `svc` rather than the newer
+# `sv` command. Search the usual locations in case it is outside root's PATH.
+SVC="$(command -v svc 2>/dev/null || true)"
+if [ -z "$SVC" ]; then
+    for candidate in /command/svc /usr/bin/svc /bin/svc /sbin/svc; do
+        if [ -x "$candidate" ]; then
+            SVC="$candidate"
+            break
+        fi
+    done
 fi
 
-cat <<EOF2
-Scheiber GX bridge installed.
+if [ -n "$SVC" ]; then
+    "$SVC" -d "$SWITCH_SERVICE_LINK" 2>/dev/null || true
+    "$SVC" -d "$SERVICE_LINK" 2>/dev/null || true
+    sleep 1
+    rm -f /run/scheiber-can-if
+    "$SVC" -u "$SERVICE_LINK"
 
-  mode:      $install_mode
-  bridge:    $APP_DIR/bridge.py
-  version:   5.4.2
-  service:   $SERVICE_LINK
-  CAN:       $CAN_IF @ $CAN_BITRATE bit/s
-  SHA-256:   $actual_sha
-  backup:    $APP_DIR/bridge.py.previous (created on updates)
-  log:       $APP_DIR/bridge.log
-  status:    $APP_DIR/status.json
+    # The main service owns CAN discovery. Give it a short head start before
+    # enabling the dependent switch process.
+    attempt=0
+    while [ "$attempt" -lt 10 ] && [ ! -s /run/scheiber-can-if ]; do
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    "$SVC" -u "$SWITCH_SERVICE_LINK"
+else
+    echo "WARNING: svc was not found; service links are installed and will start on boot." >&2
+fi
+
+cat <<EOF
+Scheiber GX services installed.
+
+  mode:             $install_mode
+  app:              $APP_DIR
+  telemetry:        $SERVICE_LINK
+  native switches:  $SWITCH_SERVICE_LINK
+  CAN selector:     $CAN_IF
+  CAN detected now: ${resolved_can_if:-pending}
+  CAN USB serial:   ${CAN_USB_SERIAL:-not pinned}
+  CAN USB ID:       ${CAN_USB_VENDOR_ID:-*}:${CAN_USB_PRODUCT_ID:-*}
+  CAN bitrate:      $CAN_BITRATE bit/s
+  switch CAN TX:    $SWITCH_TX_ENABLED
+  switch RTR sync:  $SWITCH_RTR_ENABLED
+  bridge SHA-256:   $actual_bridge_sha
+  rc.local:         $RC_LOCAL (service block before exit 0)
+  telemetry log:    $APP_DIR/bridge.log
+  switch log:       $APP_DIR/switch.log
+  switch status:    $APP_DIR/switch-status.json
 
 Next checks:
-  ip -details -statistics link show $CAN_IF
-  tail -n 80 $APP_DIR/bridge.log
-  dbus -y com.victronenergy.genset.scheiber /Connected GetValue
-  dbus -y com.victronenergy.tank.scheiber_fresh /Capacity GetValue
-EOF2
+  cat /run/scheiber-can-if 2>/dev/null || true
+  command -v svc 2>/dev/null || true
+  tail -n 100 $APP_DIR/switch.log
+  dbus -y com.victronenergy.switch.scheiber /Connected GetValue
+  dbus -y com.victronenergy.switch.scheiber /Scheiber/SynchronizedOutputCount GetValue
+EOF
