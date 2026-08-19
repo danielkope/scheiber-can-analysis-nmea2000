@@ -595,7 +595,6 @@ class Bridge:
         # recognizes this genset as providing feedback from the moment it is
         # discovered.  CAN observations will immediately replace it as needed.
         self.service.add_path("/StatusCode", STATUS_STOPPED)
-        self.service.add_path("/Error/0/Id", 0)
 
         # Victron genset integrations commonly expose /Ac/Frequency.  Keep
         # /Ac/L1/Frequency too for compatibility with existing V5.1 consumers.
