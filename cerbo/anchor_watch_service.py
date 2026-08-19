@@ -384,12 +384,12 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         w_center_y = wr_y + 4
         
         # Base starts near outer ring at the wind source angle (e.g. SSE)
-        w_base_x = wr_x + (wr_rad - 10) * math.sin(w_rad)
-        w_base_y = w_center_y - (wr_rad - 10) * math.cos(w_rad)
+        w_base_x = wr_x + (wr_rad - 8) * math.sin(w_rad)
+        w_base_y = w_center_y - (wr_rad - 8) * math.cos(w_rad)
         
         # Tip points inward towards the center
-        w_tip_x = wr_x + 4.0 * math.sin(w_rad)
-        w_tip_y = w_center_y - 4.0 * math.cos(w_rad)
+        w_tip_x = wr_x + 5.0 * math.sin(w_rad)
+        w_tip_y = w_center_y - 5.0 * math.cos(w_rad)
 
         ctx.set_source_rgba(0.0, 0.95, 1.0, 0.95)
         ctx.set_line_width(2.5)
@@ -397,17 +397,28 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
         ctx.line_to(w_tip_x, w_tip_y)
         ctx.stroke()
 
-        # Inward-pointing arrow head at the tip
-        arr_size = 7.0
-        # Inward angle is (w_rad + pi)
-        inward_rad = w_rad + math.pi
-        ctx.move_to(w_tip_x, w_tip_y)
-        ctx.line_to(w_tip_x + arr_size * math.sin(inward_rad - 0.5), w_tip_y - arr_size * math.cos(inward_rad - 0.5))
-        ctx.line_to(w_tip_x + arr_size * math.sin(inward_rad + 0.5), w_tip_y - arr_size * math.cos(inward_rad + 0.5))
-        ctx.close_path()
-        ctx.fill()
+        # Inward-pointing arrowhead using vector math
+        vx = w_tip_x - w_base_x
+        vy = w_tip_y - w_base_y
+        L = math.hypot(vx, vy)
+        if L > 0:
+            ux, uy = vx / L, vy / L
+            px, py = -uy, ux
+            arr_len = 9.0
+            arr_width = 5.0
+            
+            w1_x = w_tip_x - arr_len * ux + arr_width * px
+            w1_y = w_tip_y - arr_len * uy + arr_width * py
+            w2_x = w_tip_x - arr_len * ux - arr_width * px
+            w2_y = w_tip_y - arr_len * uy - arr_width * py
 
-        # Wind Speed and Source Direction Subtitle (e.g. "FROM 14kn NW")
+            ctx.move_to(w_tip_x, w_tip_y)
+            ctx.line_to(w1_x, w1_y)
+            ctx.line_to(w2_x, w2_y)
+            ctx.close_path()
+            ctx.fill()
+
+        # Wind Speed and Source Direction Subtitle (e.g. "FROM NW (14kn)")
         ctx.set_font_size(9)
         ctx.set_source_rgb(1.0, 1.0, 1.0)
         card = wind_direction_cardinal(current_wind_dir)
