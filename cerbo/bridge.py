@@ -2289,16 +2289,23 @@ class Bridge:
         # --------------------------------------------------------------
         if can_id in (HOUSE_PANEL_STATUS_ID, AC_PANEL_STATUS_ID) and len(data) >= 4:
             voltage = float((data[2] << 8) | data[3])
+            source_raw = int(data[0]) if len(data) >= 1 else None
             now = time.monotonic()
 
             if can_id == HOUSE_PANEL_STATUS_ID:
                 self.last_house_panel_voltage = voltage
                 self.house_panel_last_update = now
+                if source_raw in (SOURCE_OFF, SOURCE_SHORE, SOURCE_GENERATOR, SOURCE_INVERTER):
+                    if source_raw == SOURCE_INVERTER:
+                        self.mastervolt_inverter_state = 1
+                    self.house_panel_applied_source = source_raw
                 if self.service:
                     self.service["/Scheiber/HousePanelVoltage"] = voltage
             else:
                 self.last_ac_panel_voltage = voltage
                 self.ac_panel_last_update = now
+                if source_raw in (SOURCE_OFF, SOURCE_SHORE, SOURCE_GENERATOR):
+                    self.ac_panel_applied_source = source_raw
                 if self.service:
                     self.service["/Scheiber/AcPanelVoltage"] = voltage
 
