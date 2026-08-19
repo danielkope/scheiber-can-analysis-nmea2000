@@ -112,9 +112,11 @@ GEN_AC_ID = 0x02040898
 AC_PANEL_APPLIED_ID = 0x02400B90
 HOUSE_PANEL_APPLIED_ID = 0x02400B88
 
-# Confirmed panel telemetry.
-# bytes 4..5 are uint16 BE AC voltage in whole volts.
-# bytes 6..7 are frequency/status-like and retained as diagnostics.
+# Confirmed panel telemetry and continuous 1Hz heartbeat status frames.
+# Heartbeats (0x00000B88 / 0x00000B90): bytes 2..3 uint16 BE AC line voltage.
+HOUSE_PANEL_STATUS_ID = 0x00000B88
+AC_PANEL_STATUS_ID = 0x00000B90
+AC_MODULE_STATUS_ID = 0x00000898
 AC_PANEL_TELEMETRY_ID = 0x02040B90
 HOUSE_PANEL_TELEMETRY_ID = 0x02040B88
 
@@ -306,6 +308,9 @@ CAN_FILTER_IDS = tuple(sorted(set(
         HOUSE_PANEL_APPLIED_ID,
         AC_PANEL_TELEMETRY_ID,
         HOUSE_PANEL_TELEMETRY_ID,
+        HOUSE_PANEL_STATUS_ID,
+        AC_PANEL_STATUS_ID,
+        AC_MODULE_STATUS_ID,
         AC_RAMP_MARKER_ID,
         CHARGER_60A_TELEMETRY_ID,
         CHARGER_60A_DYNAMIC_ID,
@@ -2274,6 +2279,30 @@ class Bridge:
                 self.service["/Scheiber/HousePanelVoltage"] = voltage
                 self.service["/Scheiber/HousePanelFrequencyStatus"] = freq_status
 
+            self.update_genset_ac_voltage_publication()
+            self.update_shore_power_publication()
+            self.update_mastervolt_inverter_publication()
+            return
+
+        # --------------------------------------------------------------
+        # Scheiber AC/House panel 1Hz continuous status heartbeat frames
+        # --------------------------------------------------------------
+        if can_id in (HOUSE_PANEL_STATUS_ID, AC_PANEL_STATUS_ID) and len(data) >= 4:
+            voltage = float((data[2] << 8) | data[3])
+            now = time.monotonic()
+
+            if can_id == HOUSE_PANEL_STATUS_ID:
+                self.last_house_panel_voltage = voltage
+                self.house_panel_last_update = now
+                if self.service:
+                    self.service["/Scheiber/HousePanelVoltage"] = voltage
+            else:
+                self.last_ac_panel_voltage = voltage
+                self.ac_panel_last_update = now
+                if self.service:
+                    self.service["/Scheiber/AcPanelVoltage"] = voltage
+
+            self.update_ac_sources()
             self.update_genset_ac_voltage_publication()
             self.update_shore_power_publication()
             self.update_mastervolt_inverter_publication()
