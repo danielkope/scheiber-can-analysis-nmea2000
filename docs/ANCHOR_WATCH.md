@@ -39,7 +39,7 @@ graph TD
 ### 3. Multi-Sensor Alarms & Safeguards
 * 🚨 **Anchor Drag Alarm**: Geofence breach ($D > \text{Alarm Radius}$).
 * 💨 **Squall / High Wind Warning**: True Wind Speed $\ge \text{wind\_squall\_gust\_kn}$ (default $25\text{ kn}$).
-* 🔄 **Wind Shift Warning**: True Wind Direction shifts by $\ge \text{wind\_shift\_threshold\_deg}$ (default $60^\circ$) from the baseline set angle.
+* 🔄 **Wind Shift Warning**: True Wind Direction shifts by $\ge \text{wind\_shift\_threshold\_deg}$ (default $60^\circ$) from the baseline set angle. *Automatically suppressed in light air when True Wind Speed is $< 3.0\text{ kn}$ (`wind_shift_min_speed_kn`)*.
 * 🌊 **Shallow Water Warning**: Water depth sounder drops $\le \text{depth\_alarm\_threshold\_m}$ (default $2.5\text{ m}$).
 * 🔋 **Low Battery Warning**: House battery SoC drops $\le \text{battery\_low\_soc\_pct}$ (default $20\%$).
 
@@ -87,6 +87,7 @@ graph TD
   "depth_alarm_threshold_m": 2.5,
   "wind_squall_gust_kn": 25.0,
   "wind_shift_threshold_deg": 60.0,
+  "wind_shift_min_speed_kn": 3.0,
   "battery_low_soc_pct": 20.0,
   "turn_on_deck_lights_on_alarm": true,
   "deck_light_channel": "deck_floodlight",

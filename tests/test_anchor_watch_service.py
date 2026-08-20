@@ -171,6 +171,7 @@ def test_squall_alarm_trigger():
 def test_wind_shift_alarm_trigger():
     svc = aws.AnchorWatchService(config_path="/tmp/nonexistent_config.json")
     svc.current_wind_dir = 200.0
+    svc.current_wind_speed = 10.0
     svc.arm_anchor_point(43.5000, 16.2000, rode_m=50.0, radius_m=60.0)
     svc.current_lat = 43.5000
     svc.current_lon = 16.2000
@@ -178,13 +179,19 @@ def test_wind_shift_alarm_trigger():
     shift_events = []
     svc.trigger_wind_shift_alarm = lambda diff, b, c, th: shift_events.append((diff, b, c, th))
 
-    # Small shift (+20 deg)
+    # Small shift (+20 deg) with wind at 10 kn -> No alarm
     svc.current_wind_dir = 220.0
     svc.check_geofence()
     assert len(shift_events) == 0
 
-    # Major shift (+70 deg from 200 to 270)
+    # Major shift (+70 deg) but wind speed < 3 kn (e.g. 1.5 kn) -> Suppressed / No alarm
     svc.current_wind_dir = 270.0
+    svc.current_wind_speed = 1.5
+    svc.check_geofence()
+    assert len(shift_events) == 0
+
+    # Major shift (+70 deg) with wind speed >= 3 kn (e.g. 8.0 kn) -> Alarms!
+    svc.current_wind_speed = 8.0
     svc.check_geofence()
     assert len(shift_events) == 1
     assert shift_events[0][0] == pytest.approx(70.0)

@@ -79,6 +79,7 @@ DEFAULT_CONFIG = {
     "depth_alarm_threshold_m": 2.5,
     "wind_squall_gust_kn": 25.0,
     "wind_shift_threshold_deg": 60.0,
+    "wind_shift_min_speed_kn": 3.0,
     "battery_low_soc_pct": 20.0,
     # Scheiber Lighting Integration
     "turn_on_deck_lights_on_alarm": True,
@@ -1105,15 +1106,17 @@ class AnchorWatchService:
                     self.last_squall_alarm_time = now
                     self.trigger_squall_alarm(cur_wind_spd, cur_wind_dir, gust_thresh)
 
-        # 4. Wind Shift Warning
+        # 4. Wind Shift Warning (only when wind speed >= min threshold to avoid light air false alarms)
         if self.config.get("alarm_wind_shift_enabled", True):
-            shift_thresh = float(self.config.get("wind_shift_threshold_deg", 60.0))
-            if base_wind_dir is not None and cur_wind_dir is not None:
-                shift_diff = abs((cur_wind_dir - base_wind_dir + 180.0) % 360.0 - 180.0)
-                if shift_diff >= shift_thresh:
-                    if now > self.silenced_until and (now - self.last_wind_shift_alarm_time >= 900.0):
-                        self.last_wind_shift_alarm_time = now
-                        self.trigger_wind_shift_alarm(shift_diff, base_wind_dir, cur_wind_dir, shift_thresh)
+            min_wind_spd = float(self.config.get("wind_shift_min_speed_kn", 3.0))
+            if cur_wind_spd is not None and cur_wind_spd >= min_wind_spd:
+                shift_thresh = float(self.config.get("wind_shift_threshold_deg", 60.0))
+                if base_wind_dir is not None and cur_wind_dir is not None:
+                    shift_diff = abs((cur_wind_dir - base_wind_dir + 180.0) % 360.0 - 180.0)
+                    if shift_diff >= shift_thresh:
+                        if now > self.silenced_until and (now - self.last_wind_shift_alarm_time >= 900.0):
+                            self.last_wind_shift_alarm_time = now
+                            self.trigger_wind_shift_alarm(shift_diff, base_wind_dir, cur_wind_dir, shift_thresh)
 
         # 5. Shallow Water / Depth Drop Warning
         if self.config.get("alarm_depth_enabled", True):
@@ -1382,6 +1385,7 @@ class AnchorWatchService:
 
         squall_val = float(self.config.get("wind_squall_gust_kn", 25.0))
         shift_val = float(self.config.get("wind_shift_threshold_deg", 60.0))
+        min_spd_val = float(self.config.get("wind_shift_min_speed_kn", 3.0))
         depth_val = float(self.config.get("depth_alarm_threshold_m", 2.5))
         bat_val = float(self.config.get("battery_low_soc_pct", 20.0))
 
@@ -1393,7 +1397,7 @@ class AnchorWatchService:
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"• 🚨 <b>Anchor Drag:</b> {drag_on} (Limit: {self.alarm_radius_m:.0f}m)\n"
             f"• 💨 <b>Squall Alarm:</b> {squall_on} (Limit: <b>{squall_val:.0f} kn</b>)\n"
-            f"• 🔄 <b>Wind Shift:</b> {shift_on} (Sector: <b>±{shift_val:.0f}°</b> | Baseline: <b>{base_twd}</b>)\n"
+            f"• 🔄 <b>Wind Shift:</b> {shift_on} (Sector: <b>±{shift_val:.0f}°</b> | Min Spd: <b>{min_spd_val:.0f} kn</b> | Baseline: <b>{base_twd}</b>)\n"
             f"• 🌊 <b>Shallow Water:</b> {depth_on} (Limit: <b>{depth_val:.1f} m</b>)\n"
             f"• 🔋 <b>Low Battery:</b> {battery_on} (Limit: <b>{bat_val:.0f}%</b>)\n\n"
             f"<i>Use the controls below to toggle alarms or adjust limits:</i>"
