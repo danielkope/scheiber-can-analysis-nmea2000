@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Smart Anchor Watch & Alarm Service for Victron Cerbo GX.
+"""Smart Anchor Watch & Multi-Sensor Alarm Service for Victron Cerbo GX.
 
 Features:
-  1. Geofence & Swing Circle Watch (Haversine & Direct Geodesic calculation).
-  2. One-tap "Reset to Heading + Distance" projection.
-  3. Continuous Breadcrumb Track & Wind (TWS/TWD) History Recording.
+  1. Geofence & Swing Circle Watch with Geodesic Bow Projection ("Reset to Heading").
+  2. Persistent Anchor State on Disk (/data/conf/anchor_state.json) - survives restarts & reboots seamlessly.
+  3. Dedicated Rotating File Logger (/data/scheiber-gx/anchor_watch.log, 2MB x 3 backups).
   4. Real-time NMEA 2000 listener (Wind PGN 130306, Depth PGN 128267, Heading PGN 127250, GPS PGN 129029).
   5. Multi-Sensor Alarms: Anchor Drag, Squall / High Wind, Wind Shift, Shallow Water, and Low Battery.
   6. Interactive Telegram Bot with real-time settings menu, per-alarm toggles, threshold adjustments, and baseline TWD reset.
-  7. Vector Cairo Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD multi-hour time-series plot.
-  8. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
+  7. Pure-Cairo Vector Map Rendering with concentric rings, swing trail, live Wind Rose, and synchronized TWS/TWD multi-hour strip plot.
+  8. Memory-leak proof with explicit Cairo surface disposal and history decimation.
+  9. Physical lighting control via Scheiber switchboard (NEVER uses Cerbo Relay 1).
 """
 
 import os
@@ -19,10 +20,12 @@ import math
 import json
 import uuid
 import io
+import gc
 import socket
 import struct
 import threading
 import logging
+import logging.handlers
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
@@ -33,13 +36,34 @@ try:
 except ImportError:
     HAVE_CAIRO = False
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [AnchorWatch] %(message)s"
-)
+# Logging Setup with Rotating File Handler
+LOG_FILE = os.environ.get("ANCHOR_LOG", "/data/scheiber-gx/anchor_watch.log")
+try:
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+except Exception:
+    pass
+
 log = logging.getLogger("AnchorWatch")
+log.setLevel(logging.INFO)
+log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] [AnchorWatch] %(message)s")
+
+# Console handler
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(log_formatter)
+if not log.handlers:
+    log.addHandler(console_handler)
+
+# Rotating file handler (2 MB max, 3 backups)
+try:
+    file_handler = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3)
+    file_handler.setFormatter(log_formatter)
+    log.addHandler(file_handler)
+except Exception as e:
+    sys.stderr.write(f"Could not initialize file logger at {LOG_FILE}: {e}\n")
 
 CONFIG_FILE = os.environ.get("ANCHOR_CONFIG", "/data/conf/anchor_watch_config.json")
+STATE_FILE = os.environ.get("ANCHOR_STATE", "/data/conf/anchor_state.json")
+
 DEFAULT_CONFIG = {
     "telegram_bot_token": "",
     "telegram_chat_id": "",
@@ -63,6 +87,19 @@ DEFAULT_CONFIG = {
 }
 
 EARTH_RADIUS_M = 6371000.0
+MAX_HISTORY_POINTS = 1000
+
+
+def get_memory_rss_mb():
+    """Read resident memory usage (RSS) in MB."""
+    try:
+        with open("/proc/self/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return float(line.split()[1]) / 1024.0
+    except Exception:
+        pass
+    return None
 
 
 def haversine_distance_m(lat1, lon1, lat2, lon2):
@@ -625,8 +662,17 @@ def render_anchor_map_png(anchor_lat, anchor_lon, alarm_radius_m, track_points, 
     ctx.show_text(f"Cerbo GX Smart Anchor Watch • {now_str} • Lat: {current_lat or 0:.5f}°, Lon: {current_lon or 0:.5f}°")
 
     buf = io.BytesIO()
+    surface.flush()
     surface.write_to_png(buf)
-    return buf.getvalue()
+    png_bytes = buf.getvalue()
+    
+    # Explicit Cairo memory cleanup
+    surface.finish()
+    del ctx
+    del surface
+    gc.collect()
+    
+    return png_bytes
 
 
 class TelegramClient:
@@ -724,8 +770,9 @@ class TelegramClient:
 
 
 class AnchorWatchService:
-    def __init__(self, config_path=CONFIG_FILE, can_interface="can1"):
+    def __init__(self, config_path=CONFIG_FILE, state_path=STATE_FILE, can_interface="can1"):
         self.config_path = config_path
+        self.state_path = state_path
         self.can_interface = can_interface
         self.config = self.load_config()
         self.tg = TelegramClient(
@@ -733,7 +780,7 @@ class AnchorWatchService:
             self.config.get("telegram_chat_id", "")
         )
         
-        # Anchor State
+        # Anchor State (Defaults)
         self.armed = False
         self.anchor_lat = None
         self.anchor_lon = None
@@ -750,10 +797,13 @@ class AnchorWatchService:
         self.last_depth_alarm_time = -1000.0
         self.last_battery_alarm_time = -1000.0
 
-        # History Buffers (up to 3000 points = ~8-24h)
+        # History Buffers (capped & downsampled at MAX_HISTORY_POINTS)
         self.track_points = []
         self.wind_history = []
         self.last_track_record_time = 0.0
+        self.last_state_save_time = 0.0
+        self.start_monotonic = time.monotonic()
+        self.start_utc = datetime.now(timezone.utc)
 
         # Sensor readings
         self.current_lat = None
@@ -764,6 +814,11 @@ class AnchorWatchService:
         self.current_wind_speed = None
         self.current_wind_dir = None
         self.current_soc = None
+        self.gps_sats = 0
+        self.gps_fix = 0
+
+        # Load persisted active anchor state (if any)
+        self.load_state()
 
         # D-Bus
         self.bus = None
@@ -794,6 +849,59 @@ class AnchorWatchService:
             log.info(f"Saved config to {self.config_path}")
         except Exception as e:
             log.error(f"Failed to save config: {e}")
+
+    def load_state(self):
+        """Restore active anchor watch state and history from disk."""
+        if not os.path.isfile(self.state_path):
+            return
+        try:
+            with open(self.state_path, "r") as f:
+                st = json.load(f)
+            if st.get("armed"):
+                self.armed = True
+                self.anchor_lat = st.get("anchor_lat")
+                self.anchor_lon = st.get("anchor_lon")
+                self.rode_m = float(st.get("rode_m", self.rode_m))
+                self.alarm_radius_m = float(st.get("alarm_radius_m", self.alarm_radius_m))
+                self.baseline_wind_dir = st.get("baseline_wind_dir")
+                self.track_points = st.get("track_points", [])
+                self.wind_history = st.get("wind_history", [])
+                if st.get("set_time_iso"):
+                    try:
+                        self.set_time = datetime.fromisoformat(st["set_time_iso"].replace("Z", "+00:00"))
+                    except Exception:
+                        self.set_time = datetime.now(timezone.utc)
+                log.info(
+                    f"Restored active anchor watch from state file: Anchor ({self.anchor_lat:.5f}, {self.anchor_lon:.5f}), "
+                    f"Rode {self.rode_m}m, Radius {self.alarm_radius_m}m, BaseWind {self.baseline_wind_dir}°, "
+                    f"Points: {len(self.track_points)} track / {len(self.wind_history)} wind"
+                )
+        except Exception as e:
+            log.error(f"Failed to load anchor state {self.state_path}: {e}")
+
+    def save_state(self):
+        """Persist active anchor watch state and history to disk atomically."""
+        try:
+            os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+            st = {
+                "armed": self.armed,
+                "anchor_lat": self.anchor_lat,
+                "anchor_lon": self.anchor_lon,
+                "rode_m": self.rode_m,
+                "alarm_radius_m": self.alarm_radius_m,
+                "baseline_wind_dir": self.baseline_wind_dir,
+                "set_time_iso": self.set_time.isoformat() if self.set_time else None,
+                "track_points": self.track_points[-MAX_HISTORY_POINTS:],
+                "wind_history": self.wind_history[-MAX_HISTORY_POINTS:],
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(st, f, indent=2)
+            os.replace(tmp, self.state_path)
+            self.last_state_save_time = time.monotonic()
+        except Exception as e:
+            log.error(f"Failed to save anchor state: {e}")
 
     def init_dbus(self):
         try:
@@ -879,6 +987,8 @@ class AnchorWatchService:
                         if lat is not None and lon is not None and int(fix) > 0 and sats >= best_sats:
                             self.current_lat = float(lat)
                             self.current_lon = float(lon)
+                            self.gps_sats = sats
+                            self.gps_fix = int(fix)
                             best_sats = sats
                             if "Speed" in val and val["Speed"] is not None:
                                 self.current_sog = float(val["Speed"]) * 1.94384
@@ -916,6 +1026,8 @@ class AnchorWatchService:
             self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
         if self.current_wind_speed is not None and self.current_wind_dir is not None:
             self.wind_history.append({"tws": self.current_wind_speed, "twd": self.current_wind_dir, "time": time.time()})
+        
+        self.save_state()
         log.info(f"Anchor Armed: Point ({self.anchor_lat:.5f}, {self.anchor_lon:.5f}), Rode: {self.rode_m}m, Radius: {self.alarm_radius_m}m, BaseWind: {self.baseline_wind_dir}°")
 
     def reset_to_heading(self, distance_m=None, radius_m=None):
@@ -932,6 +1044,7 @@ class AnchorWatchService:
 
     def disarm(self):
         self.armed = False
+        self.save_state()
         log.info("Anchor Watch Disarmed.")
 
     def check_geofence(self):
@@ -939,30 +1052,46 @@ class AnchorWatchService:
             return
 
         now = time.monotonic()
+        
+        # Local snapshots to prevent race conditions with N2K listener thread
+        cur_lat = self.current_lat
+        cur_lon = self.current_lon
+        cur_wind_spd = self.current_wind_speed
+        cur_wind_dir = self.current_wind_dir
+        cur_depth = self.current_depth
+        cur_soc = self.current_soc
+        base_wind_dir = self.baseline_wind_dir
 
         # 1. Record breadcrumbs & wind sample every 10s
         if now - self.last_track_record_time >= 10.0:
             record = True
             if self.track_points:
                 last_pt = self.track_points[-1]
-                d = haversine_distance_m(self.current_lat, self.current_lon, last_pt["lat"], last_pt["lon"])
+                d = haversine_distance_m(cur_lat, cur_lon, last_pt["lat"], last_pt["lon"])
                 if d < 1.5 and (now - self.last_track_record_time < 60.0):
                     record = False
             if record:
-                self.track_points.append({"lat": self.current_lat, "lon": self.current_lon, "time": time.time()})
-                if self.current_wind_speed is not None and self.current_wind_dir is not None:
-                    self.wind_history.append({"tws": self.current_wind_speed, "twd": self.current_wind_dir, "time": time.time()})
+                self.track_points.append({"lat": cur_lat, "lon": cur_lon, "time": time.time()})
+                if cur_wind_spd is not None and cur_wind_dir is not None:
+                    self.wind_history.append({"tws": cur_wind_spd, "twd": cur_wind_dir, "time": time.time()})
                     if self.baseline_wind_dir is None:
-                        self.baseline_wind_dir = self.current_wind_dir
-                if len(self.track_points) > 3000:
-                    self.track_points.pop(0)
-                if len(self.wind_history) > 3000:
-                    self.wind_history.pop(0)
+                        self.baseline_wind_dir = cur_wind_dir
+
+                # Downsample history if exceeding MAX_HISTORY_POINTS to strictly bound memory
+                if len(self.track_points) >= MAX_HISTORY_POINTS:
+                    self.track_points = self.track_points[::2]
+                if len(self.wind_history) >= MAX_HISTORY_POINTS:
+                    self.wind_history = self.wind_history[::2]
+
                 self.last_track_record_time = now
+
+                # Periodic state persistence every 60s
+                if now - self.last_state_save_time >= 60.0:
+                    self.save_state()
 
         # 2. Anchor Drag Alarm (Geofence Breach)
         if self.config.get("alarm_drag_enabled", True):
-            dist_m = haversine_distance_m(self.current_lat, self.current_lon, self.anchor_lat, self.anchor_lon)
+            dist_m = haversine_distance_m(cur_lat, cur_lon, self.anchor_lat, self.anchor_lon)
             if dist_m > self.alarm_radius_m:
                 if now > self.silenced_until and (now - self.last_alarm_time >= 30.0):
                     self.last_alarm_time = now
@@ -971,36 +1100,36 @@ class AnchorWatchService:
         # 3. Squall / High Wind Warning
         if self.config.get("alarm_squall_enabled", True):
             gust_thresh = float(self.config.get("wind_squall_gust_kn", 25.0))
-            if self.current_wind_speed is not None and self.current_wind_speed >= gust_thresh:
+            if cur_wind_spd is not None and cur_wind_spd >= gust_thresh:
                 if now > self.silenced_until and (now - self.last_squall_alarm_time >= 600.0):
                     self.last_squall_alarm_time = now
-                    self.trigger_squall_alarm(self.current_wind_speed, self.current_wind_dir, gust_thresh)
+                    self.trigger_squall_alarm(cur_wind_spd, cur_wind_dir, gust_thresh)
 
         # 4. Wind Shift Warning
         if self.config.get("alarm_wind_shift_enabled", True):
             shift_thresh = float(self.config.get("wind_shift_threshold_deg", 60.0))
-            if self.baseline_wind_dir is not None and self.current_wind_dir is not None:
-                shift_diff = abs((self.current_wind_dir - self.baseline_wind_dir + 180.0) % 360.0 - 180.0)
+            if base_wind_dir is not None and cur_wind_dir is not None:
+                shift_diff = abs((cur_wind_dir - base_wind_dir + 180.0) % 360.0 - 180.0)
                 if shift_diff >= shift_thresh:
                     if now > self.silenced_until and (now - self.last_wind_shift_alarm_time >= 900.0):
                         self.last_wind_shift_alarm_time = now
-                        self.trigger_wind_shift_alarm(shift_diff, self.baseline_wind_dir, self.current_wind_dir, shift_thresh)
+                        self.trigger_wind_shift_alarm(shift_diff, base_wind_dir, cur_wind_dir, shift_thresh)
 
         # 5. Shallow Water / Depth Drop Warning
         if self.config.get("alarm_depth_enabled", True):
             depth_thresh = float(self.config.get("depth_alarm_threshold_m", 2.5))
-            if self.current_depth is not None and self.current_depth <= depth_thresh:
+            if cur_depth is not None and cur_depth <= depth_thresh:
                 if now > self.silenced_until and (now - self.last_depth_alarm_time >= 300.0):
                     self.last_depth_alarm_time = now
-                    self.trigger_depth_alarm(self.current_depth, depth_thresh)
+                    self.trigger_depth_alarm(cur_depth, depth_thresh)
 
         # 6. Low Battery Warning
         if self.config.get("alarm_battery_enabled", True):
             bat_thresh = float(self.config.get("battery_low_soc_pct", 20.0))
-            if self.current_soc is not None and self.current_soc <= bat_thresh:
+            if cur_soc is not None and cur_soc <= bat_thresh:
                 if now > self.silenced_until and (now - self.last_battery_alarm_time >= 1800.0):
                     self.last_battery_alarm_time = now
-                    self.trigger_battery_alarm(self.current_soc, bat_thresh)
+                    self.trigger_battery_alarm(cur_soc, bat_thresh)
 
     def trigger_alarm(self, dist_m):
         log.warning(f"🚨 ANCHOR DRAG DETECTED: Distance {dist_m:.1f}m exceeds limit {self.alarm_radius_m:.1f}m!")
@@ -1271,6 +1400,33 @@ class AnchorWatchService:
         )
         return msg
 
+    def format_diagnostics_message(self):
+        """Format detailed memory and service diagnostics message."""
+        uptime_s = int(time.monotonic() - self.start_monotonic)
+        uptime_h = uptime_s // 3600
+        uptime_m = (uptime_s % 3600) // 60
+        rss_mb = get_memory_rss_mb()
+        rss_str = f"{rss_mb:.1f} MB" if rss_mb is not None else "N/A"
+
+        n2k_status = "🟢 Active" if self.can_thread_running else "🔴 Stopped"
+        dbus_status = "🟢 Connected" if self.bus else "🟡 Disconnected"
+        gps_status = f"🟢 Fix ({self.gps_sats} sats)" if self.current_lat else "🟡 Searching"
+
+        return (
+            f"🩺 <b>Anchor Watch Diagnostics</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• ⏱️ <b>Service Uptime:</b> {uptime_h}h {uptime_m}m (Started: {self.start_utc.strftime('%H:%M:%S UTC')})\n"
+            f"• 💾 <b>Process Memory (RSS):</b> <b>{rss_str}</b>\n"
+            f"• 📍 <b>Track History:</b> {len(self.track_points)} / {MAX_HISTORY_POINTS} points\n"
+            f"• 💨 <b>Wind History:</b> {len(self.wind_history)} / {MAX_HISTORY_POINTS} samples\n"
+            f"• 📡 <b>N2K CAN Interface:</b> {n2k_status} ({self.can_interface})\n"
+            f"• 🔌 <b>D-Bus SystemBus:</b> {dbus_status}\n"
+            f"• 🛰️ <b>GPS State:</b> {gps_status}\n"
+            f"• ⚓ <b>Watch State:</b> {'🟢 ARMED' if self.armed else '⚪ DISARMED'}\n"
+            f"• 🗄️ <b>State File:</b> <code>{self.state_path}</code>\n"
+            f"• 📜 <b>Log File:</b> <code>{LOG_FILE}</code>\n"
+        )
+
     def format_status_message(self):
         self.poll_sensors()
         map_url = f"https://maps.google.com/?q={self.current_lat or 0:.5f},{self.current_lon or 0:.5f}"
@@ -1314,6 +1470,9 @@ class AnchorWatchService:
             
         elif cmd in ("/settings", "/alarms", "/config"):
             self.tg.send_message(self.format_settings_message(), reply_markup=self.build_settings_menu(), chat_id=chat_id)
+
+        elif cmd in ("/diag", "/health", "/mem", "/diagnostics"):
+            self.tg.send_message(self.format_diagnostics_message(), reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif cmd in ("/status", "/anchor", "/map"):
             if len(parts) > 1 and parts[1].lower() == "reset":
@@ -1401,22 +1560,26 @@ class AnchorWatchService:
         elif data == "rode_plus":
             self.rode_m += 5.0
             self.alarm_radius_m = self.rode_m + self.config.get("default_safety_margin_m", 10.0)
+            self.save_state()
             msg = f"⛓️ <b>Rode Distance Increased:</b>\n• Chain Rode: <b>{self.rode_m:.0f} m</b>\n• Alarm Radius: <b>{self.alarm_radius_m:.0f} m</b>"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "rode_minus":
             self.rode_m = max(5.0, self.rode_m - 5.0)
             self.alarm_radius_m = self.rode_m + self.config.get("default_safety_margin_m", 10.0)
+            self.save_state()
             msg = f"⛓️ <b>Rode Distance Decreased:</b>\n• Chain Rode: <b>{self.rode_m:.0f} m</b>\n• Alarm Radius: <b>{self.alarm_radius_m:.0f} m</b>"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "radius_plus":
             self.alarm_radius_m += 5.0
+            self.save_state()
             msg = f"⭕ <b>Alarm Radius Increased to {self.alarm_radius_m:.0f} m</b> (Rode: {self.rode_m:.0f} m)"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
         elif data == "radius_minus":
             self.alarm_radius_m = max(10.0, self.alarm_radius_m - 5.0)
+            self.save_state()
             msg = f"⭕ <b>Alarm Radius Decreased to {self.alarm_radius_m:.0f} m</b> (Rode: {self.rode_m:.0f} m)"
             self.tg.send_message(msg, reply_markup=self.build_quick_menu(), chat_id=chat_id)
 
@@ -1494,6 +1657,7 @@ class AnchorWatchService:
             self.poll_sensors()
             if self.current_wind_dir is not None:
                 self.baseline_wind_dir = self.current_wind_dir
+                self.save_state()
                 card = wind_direction_cardinal(self.baseline_wind_dir)
                 msg = f"🎯 <b>Baseline Wind Direction Reset to Current:</b>\n• Baseline TWD: <b>{self.baseline_wind_dir:.0f}° {card}</b>\n• Alert Sector: <b>±{self.config.get('wind_shift_threshold_deg', 60):.0f}°</b>"
             else:
@@ -1562,7 +1726,7 @@ def main():
         except KeyboardInterrupt:
             break
         except Exception as e:
-            log.error(f"Main loop exception: {e}")
+            log.error(f"Main loop exception: {e}", exc_info=True)
             time.sleep(2.0)
 
 

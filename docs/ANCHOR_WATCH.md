@@ -14,15 +14,17 @@ The **Smart Anchor Watch Service** (`cerbo/anchor_watch_service.py`) is an auton
 graph TD
     A[NMEA 2000 Network / can1] -->|PGN 130306 Wind\nPGN 128267 Depth\nPGN 127250 Heading\nPGN 129029 GPS| S[Anchor Watch Service]
     B[Victron D-Bus] -->|GPS Fix / SOG / COG\nBattery SoC| S
+    S -->|State & Config| F["/data/conf/anchor_state.json\n/data/conf/anchor_watch_config.json"]
+    S -->|Rotating Log 2MB x 3| L["/data/scheiber-gx/anchor_watch.log"]
     S -->|Cairo 900x1020 Chart| T[Telegram Bot API]
     S -->|Deck Floodlights / Cockpit Lights| D[Scheiber Multibloc V8 CAN]
     T -->|Interactive Callbacks & Commands| S
 ```
 
-### 1. Geodesic Anchor Projection Ahead
-When **`Drop Anchor`** or **`Reset to Heading`** is triggered, the system projects the seabed anchor coordinates forward from the vessel's current GPS position along its live bow heading by the specified chain rode length:
-$$\text{Anchor Lat/Lon} = \text{Project}(\text{Boat GPS}, \text{Heading}, \text{Rode Length})$$
-The safe alarm circle is drawn centered on this seabed anchor point, with the vessel connected via a dashed chain rode vector.
+### 1. Geodesic Anchor Projection & State Persistence
+* When **`Drop Anchor`** or **`Reset to Heading`** is triggered, the system projects the seabed anchor coordinates forward from the vessel's current GPS position along its live bow heading by the specified chain rode length:
+  $$\text{Anchor Lat/Lon} = \text{Project}(\text{Boat GPS}, \text{Heading}, \text{Rode Length})$$
+* **Crash & Reboot Resilience**: The armed state, drop coordinates, rode length, alarm radius, baseline wind direction, and swing track points are continuously saved to `/data/conf/anchor_state.json`. If the service restarts or Cerbo reboots, the watch session is **automatically restored** without manual re-arming.
 
 ### 2. Live Cairo Nautical Chart & Strip Plot Rendering
 * **North-Up Chart Viewport**: Concentric distance rings (10m / 20m / 50m increments), breadcrumb swing history trail, vessel hull silhouette oriented to true heading, and green dashed safe alarm perimeter.
@@ -32,6 +34,7 @@ The safe alarm circle is drawn centered on this seabed anchor point, with the ve
   * Adaptive time axis automatically selects clean grid intervals (`3m`, `10m`, `30m`, `1h`, `2h`, `4h`, `6h`) for sessions lasting from 15 minutes to 24+ hours.
   * Vertical gridlines with dual time labels: Clock time (`HH:MM UTC`) and relative offset (`-2h`, `-1h`, `NOW`).
   * Live stats banner: `GUST: XX.X kn | AVG: YY.Y kn | SPAN: Z.Zh`.
+* **Zero-Leak Memory Management**: Explicit PyCairo surface disposal (`surface.finish()`, `gc.collect()`) and bounded buffer downsampling (`MAX_HISTORY_POINTS = 1000`) strictly cap memory usage at ~14–20 MB RSS.
 
 ### 3. Multi-Sensor Alarms & Safeguards
 * 🚨 **Anchor Drag Alarm**: Geofence breach ($D > \text{Alarm Radius}$).
@@ -51,47 +54,24 @@ The safe alarm circle is drawn centered on this seabed anchor point, with the ve
 
 ## 2. Telegram Commands & Interactive Keypads
 
-### Main Quick Menu (`/menu`, `/start`, `/status`)
-```text
-┌─────────────────────────┬─────────────────────────┐
-│   ⚓ Drop Anchor         │   🔄 Reset to Heading   │
-├─────────────────────────┼─────────────────────────┤
-│   ⛓️ +5m Rode (50m)     │   ⛓️ -5m Rode (50m)     │
-├─────────────────────────┼─────────────────────────┤
-│   ⭕ +5m Radius (60m)   │   ⭕ -5m Radius (60m)   │
-├─────────────────────────┼─────────────────────────┤
-│   📊 Status & Map       │   💡 Deck Lights (OFF)  │
-├─────────────────────────┼─────────────────────────┤
-│   📍 Open in Google Maps│   ⚙️ Alarm Settings     │
-├─────────────────────────┴─────────────────────────┤
-│                 ❌ Disarm Alarm                   │
-└───────────────────────────────────────────────────┘
-```
+### Commands Reference
 
-### Alarm Settings Menu (`/settings`, `/alarms`, `/config`)
-```text
-┌───────────────────────────────────────────────────┐
-│   🚨 Drag Alarm: 🟢 ON                            │
-├─────────────────────────┬───────────┬─────────────┤
-│   💨 Squall (25kn): 🟢  │   ➖ 5kn  │   ➕ 5kn    │
-├─────────────────────────┼───────────┼─────────────┤
-│   🔄 Shift (±60°): 🟢   │   ➖ 15°  │   ➕ 15°    │
-├─────────────────────────┴───────────┴─────────────┤
-│   🎯 Reset Baseline TWD (Base: 285° | Cur: 290°)  │
-├─────────────────────────┬───────────┬─────────────┤
-│   🌊 Depth (2.5m): 🟢   │   ➖ 0.5m │   ➕ 0.5m   │
-├─────────────────────────┼───────────┼─────────────┤
-│   🔋 Battery (20%): 🟢  │   ➖ 5%   │   ➕ 5%     │
-├─────────────────────────┴───────────┴─────────────┤
-│              ⬅️ Back to Main Menu                 │
-└───────────────────────────────────────────────────┘
-```
+| Command | Action |
+|---|---|
+| `/status`, `/map` | Returns live anchor status, distance, heading, SOG, battery SoC, and rendered vector map. |
+| `/menu`, `/start` | Displays the interactive quick button menu. |
+| `/settings`, `/alarms` | Opens the interactive settings keypad to toggle alarms or adjust thresholds. |
+| `/diag`, `/health`, `/mem` | Displays live service health, memory RSS, sample counts, and D-Bus/N2K status. |
+| `/anchor reset` | Re-calculates anchor coordinates from current GPS along current heading using existing rode length. |
+| `/anchor off` | Disarms the anchor watch. |
 
 ---
 
-## 3. Configuration Reference (`/data/conf/anchor_watch_config.json`)
+## 3. Configuration & State Persistence
 
-All settings are automatically saved and persisted across Cerbo GX reboots:
+* **Configuration**: `/data/conf/anchor_watch_config.json`
+* **Active State**: `/data/conf/anchor_state.json`
+* **Rotating Log**: `/data/scheiber-gx/anchor_watch.log` (2MB per file, 3 backups)
 
 ```json
 {
@@ -133,17 +113,17 @@ To ensure alarm notifications wake you up reliably during sleep:
 
 ---
 
-## 5. Service Lifecycle & Reboot Persistence
+## 5. Service Lifecycle & Diagnostics
 
-The service is managed by `daemontools` / `runit` and automatically initialized on boot via `/data/rc.local`:
+The service is managed by `runit` and automatically initialized on boot via `/data/rc.local`:
 
 ```bash
-# Check service status
+# Check service status & uptime
 svstat /service/anchor-watch
 
 # Restart service
 svc -t /service/anchor-watch
 
-# View live service logs
+# View live service logs with memory metrics & alarm history
 tail -F /data/scheiber-gx/anchor_watch.log
 ```

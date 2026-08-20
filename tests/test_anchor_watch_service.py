@@ -260,3 +260,66 @@ def test_settings_menu_and_per_alarm_toggles():
     assert any("Reset Baseline TWD" in b for b in buttons)
     assert any("Depth" in b for b in buttons)
     assert any("Battery" in b for b in buttons)
+
+
+def test_state_persistence_and_restore(tmp_path):
+    state_file = str(tmp_path / "anchor_state.json")
+    config_file = str(tmp_path / "anchor_config.json")
+
+    # 1. Arm anchor and save state
+    svc1 = aws.AnchorWatchService(config_path=config_file, state_path=state_file)
+    svc1.current_wind_dir = 290.0
+    svc1.arm_anchor_point(43.5123, 16.2123, rode_m=45.0, radius_m=55.0)
+    svc1.track_points.append({"lat": 43.5120, "lon": 16.2120, "time": 1000.0})
+    svc1.wind_history.append({"tws": 14.5, "twd": 290.0, "time": 1000.0})
+    svc1.save_state()
+
+    assert os.path.isfile(state_file)
+
+    # 2. Simulate process crash / restart by initializing a new service instance
+    svc2 = aws.AnchorWatchService(config_path=config_file, state_path=state_file)
+    assert svc2.armed is True
+    assert svc2.anchor_lat == pytest.approx(43.5123)
+    assert svc2.anchor_lon == pytest.approx(16.2123)
+    assert svc2.rode_m == 45.0
+    assert svc2.alarm_radius_m == 55.0
+    assert svc2.baseline_wind_dir == 290.0
+    assert len(svc2.track_points) == 1
+    assert len(svc2.wind_history) == 1
+
+    # 3. Disarm and check state persistence
+    svc2.disarm()
+    svc3 = aws.AnchorWatchService(config_path=config_file, state_path=state_file)
+    assert svc3.armed is False
+
+
+def test_history_decimation_bounds_memory(tmp_path):
+    state_file = str(tmp_path / "anchor_state.json")
+    config_file = str(tmp_path / "anchor_config.json")
+    svc = aws.AnchorWatchService(config_path=config_file, state_path=state_file)
+    svc.arm_anchor_point(43.5000, 16.2000)
+
+    # Fill track points up to MAX_HISTORY_POINTS
+    svc.track_points = [{"lat": 43.5000, "lon": 16.2000, "time": float(i)} for i in range(aws.MAX_HISTORY_POINTS)]
+    svc.wind_history = [{"tws": 15.0, "twd": 280.0, "time": float(i)} for i in range(aws.MAX_HISTORY_POINTS)]
+    svc.current_lat = 43.5005
+    svc.current_lon = 16.2005
+    svc.current_wind_speed = 16.0
+    svc.current_wind_dir = 285.0
+    svc.last_track_record_time = -100.0
+
+    svc.check_geofence()
+    # Should have been decimated from 1000 to ~501
+    assert len(svc.track_points) <= (aws.MAX_HISTORY_POINTS // 2) + 2
+    assert len(svc.wind_history) <= (aws.MAX_HISTORY_POINTS // 2) + 2
+
+
+def test_diagnostics_message(tmp_path):
+    state_file = str(tmp_path / "anchor_state.json")
+    config_file = str(tmp_path / "anchor_config.json")
+    svc = aws.AnchorWatchService(config_path=config_file, state_path=state_file)
+    diag = svc.format_diagnostics_message()
+    assert "Service Uptime" in diag
+    assert "Process Memory" in diag
+    assert "N2K CAN Interface" in diag
+
