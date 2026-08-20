@@ -67,11 +67,26 @@ graph TD
 
 ---
 
-## 3. Configuration & State Persistence
+### 6. NMEA 2000 Signal Loss Watchdog & Recovery
+* The service continuously monitors CAN frame arrival on `can1`.
+* If no NMEA 2000 frames arrive for $> 20\text{ seconds}$ while armed, the bot sends an alert:
+  ```text
+  ⚠️ NMEA 2000 SIGNAL LOST!
+  📡 No data received from can1 for 25s.
+  💨 Wind & 🌊 Depth readings are temporarily paused.
+  🛡️ Anchor Geofence Watch remains ACTIVE using D-Bus GPS.
+  ```
+* When communication resumes, the CAN listener re-binds automatically and sends a recovery message (`✅ NMEA 2000 SIGNAL RESTORED!`).
 
-* **Configuration**: `/data/conf/anchor_watch_config.json`
-* **Active State**: `/data/conf/anchor_state.json`
-* **Rotating Log**: `/data/scheiber-gx/anchor_watch.log` (2MB per file, 3 backups)
+---
+
+## 3. Configuration, State & Disk Storage Guarantees
+
+* **Configuration**: `/data/conf/anchor_watch_config.json` (~1 KB)
+* **Active State**: `/data/conf/anchor_state.json` (~50 KB, capped at 1,000 points with automatic decimation)
+* **Rotating Log**: `/data/scheiber-gx/anchor_watch.log` (Capped at 2 MB $\times$ 3 backup files = **6 MB max**)
+* **Chart Images**: Rendered entirely **in-memory** (`io.BytesIO`) and streamed via HTTP multipart to Telegram — **never written to disk**.
+* **Total Disk Footprint**: Strictly bounded at **$< 7\text{ MB}$ permanently**. It will never fill up the Cerbo GX flash storage.
 
 ```json
 {

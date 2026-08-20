@@ -330,3 +330,43 @@ def test_diagnostics_message(tmp_path):
     assert "Process Memory" in diag
     assert "N2K CAN Interface" in diag
 
+
+def test_n2k_loss_watchdog_and_recovery_notifications(tmp_path):
+    state_file = str(tmp_path / "anchor_state.json")
+    config_file = str(tmp_path / "anchor_config.json")
+    svc = aws.AnchorWatchService(config_path=config_file, state_path=state_file)
+    svc.config["telegram_bot_token"] = "mock_token"
+    svc.arm_anchor_point(43.5000, 16.2000)
+    svc.current_lat = 43.5000
+    svc.current_lon = 16.2000
+
+    sent_messages = []
+    svc.tg.send_message = lambda text, reply_markup=None, chat_id=None: sent_messages.append(text)
+
+    # 1. N2K active with recent frame 2s ago
+    import time
+    now = time.monotonic()
+    svc.last_n2k_frame_time = now - 2.0
+    svc.n2k_online = True
+    svc.check_geofence()
+    assert len(sent_messages) == 0
+
+    # 2. N2K frames stop arriving (25s without frame)
+    svc.last_n2k_frame_time = now - 25.0
+    svc.check_geofence()
+    assert len(sent_messages) == 1
+    assert "NMEA 2000 SIGNAL LOST" in sent_messages[0]
+    assert svc.n2k_online is False
+    assert svc.n2k_lost_notified is True
+
+    # 3. N2K frames resume -> recovery notification triggered
+    # Simulate frame arrival in listener loop
+    svc.last_n2k_frame_time = time.monotonic()
+    svc.n2k_online = True
+    if svc.n2k_lost_notified:
+        svc._notify_n2k_recovered()
+    assert len(sent_messages) == 2
+    assert "NMEA 2000 SIGNAL RESTORED" in sent_messages[1]
+    assert svc.n2k_lost_notified is False
+
+

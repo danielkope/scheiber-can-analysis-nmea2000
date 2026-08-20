@@ -818,6 +818,11 @@ class AnchorWatchService:
         self.gps_sats = 0
         self.gps_fix = 0
 
+        # N2K Heartbeat & Loss Detection Watchdog
+        self.last_n2k_frame_time = 0.0
+        self.n2k_online = False
+        self.n2k_lost_notified = False
+
         # Load persisted active anchor state (if any)
         self.load_state()
 
@@ -918,55 +923,72 @@ class AnchorWatchService:
         t.start()
 
     def _n2k_reader_loop(self):
-        try:
-            s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-            s.bind((self.can_interface,))
-            s.settimeout(2.0)
-            log.info(f"N2K CAN listener active on {self.can_interface}")
-        except Exception as e:
-            log.warning(f"Could not bind to {self.can_interface}: {e}")
-            return
-
         while self.can_thread_running:
+            s = None
             try:
-                cf, addr = s.recvfrom(16)
-                can_id, can_dlc, data = struct.unpack('<IB3x8s', cf)
-                can_id &= 0x1FFFFFFF
-                pgn = (can_id >> 8) & 0x1FFFF
-                if (pgn & 0xFF00) < 0xF000:
-                    pgn = pgn & 0x1FF00
+                s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+                s.bind((self.can_interface,))
+                s.settimeout(2.0)
+                log.info(f"N2K CAN listener active on {self.can_interface}")
 
-                # 1. PGN 130306: Wind Data
-                if pgn == 130306:
-                    speed_raw = struct.unpack('<H', data[1:3])[0]
-                    angle_raw = struct.unpack('<H', data[3:5])[0]
-                    ref = data[5] & 0x07
-                    if speed_raw != 0xFFFF:
-                        self.current_wind_speed = (speed_raw * 0.01) * 1.94384
-                    if angle_raw != 0xFFFF:
-                        angle_deg = math.degrees(angle_raw * 0.0001)
-                        if ref == 0:  # True North (TWD)
-                            self.current_wind_dir = angle_deg
-                        elif ref in (2, 3):  # Apparent or True Boat relative
-                            self.current_wind_dir = (self.current_heading + angle_deg) % 360.0
+                while self.can_thread_running:
+                    try:
+                        cf, addr = s.recvfrom(16)
+                        now_m = time.monotonic()
+                        self.last_n2k_frame_time = now_m
+                        if not self.n2k_online:
+                            self.n2k_online = True
+                            if self.n2k_lost_notified:
+                                self._notify_n2k_recovered()
 
-                # 2. PGN 128267: Water Depth
-                elif pgn == 128267:
-                    depth_raw = struct.unpack('<I', data[1:5])[0]
-                    if depth_raw != 0xFFFFFFFF:
-                        self.current_depth = depth_raw * 0.01
+                        can_id, can_dlc, data = struct.unpack('<IB3x8s', cf)
+                        can_id &= 0x1FFFFFFF
+                        pgn = (can_id >> 8) & 0x1FFFF
+                        if (pgn & 0xFF00) < 0xF000:
+                            pgn = pgn & 0x1FF00
 
-                # 3. PGN 127250: Vessel Heading
-                elif pgn == 127250:
-                    hdg_raw = struct.unpack('<H', data[1:3])[0]
-                    if hdg_raw != 0xFFFF:
-                        self.current_heading = math.degrees(hdg_raw * 0.0001)
+                        # 1. PGN 130306: Wind Data
+                        if pgn == 130306:
+                            speed_raw = struct.unpack('<H', data[1:3])[0]
+                            angle_raw = struct.unpack('<H', data[3:5])[0]
+                            ref = data[5] & 0x07
+                            if speed_raw != 0xFFFF:
+                                self.current_wind_speed = (speed_raw * 0.01) * 1.94384
+                            if angle_raw != 0xFFFF:
+                                angle_deg = math.degrees(angle_raw * 0.0001)
+                                if ref == 0:  # True North (TWD)
+                                    self.current_wind_dir = angle_deg
+                                elif ref in (2, 3):  # Apparent or True Boat relative
+                                    self.current_wind_dir = (self.current_heading + angle_deg) % 360.0
 
-            except socket.timeout:
-                pass
+                        # 2. PGN 128267: Water Depth
+                        elif pgn == 128267:
+                            depth_raw = struct.unpack('<I', data[1:5])[0]
+                            if depth_raw != 0xFFFFFFFF:
+                                self.current_depth = depth_raw * 0.01
+
+                        # 3. PGN 127250: Vessel Heading
+                        elif pgn == 127250:
+                            hdg_raw = struct.unpack('<H', data[1:3])[0]
+                            if hdg_raw != 0xFFFF:
+                                self.current_heading = math.degrees(hdg_raw * 0.0001)
+
+                    except socket.timeout:
+                        pass
+                    except Exception as e:
+                        log.debug(f"N2K frame read exception: {e}")
+                        break
             except Exception as e:
-                log.debug(f"N2K reader exception: {e}")
-                time.sleep(0.5)
+                log.debug(f"Could not bind to {self.can_interface}: {e}")
+            finally:
+                if s:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+
+            if self.can_thread_running:
+                time.sleep(3.0)
 
     def poll_sensors(self):
         if not self.bus:
@@ -1062,6 +1084,14 @@ class AnchorWatchService:
         cur_depth = self.current_depth
         cur_soc = self.current_soc
         base_wind_dir = self.baseline_wind_dir
+
+        # Check NMEA 2000 communication watchdog (20 seconds without frames)
+        if self.n2k_online or self.last_n2k_frame_time > 0:
+            elapsed_n2k = now - self.last_n2k_frame_time
+            if elapsed_n2k > 20.0 and self.n2k_online:
+                self.n2k_online = False
+                self.n2k_lost_notified = True
+                self._notify_n2k_lost(elapsed_n2k)
 
         # 1. Record breadcrumbs & wind sample every 10s
         if now - self.last_track_record_time >= 10.0:
@@ -1235,6 +1265,28 @@ class AnchorWatchService:
             f"💡 <i>Consider running engine/generator or reducing DC loads.</i>"
         )
         self.tg.send_message(msg, reply_markup=self.build_quick_menu())
+
+    def _notify_n2k_lost(self, elapsed_s):
+        log.warning(f"⚠️ NMEA 2000 communication lost! No frames received for {elapsed_s:.0f}s.")
+        if self.armed and self.config.get("telegram_bot_token"):
+            msg = (
+                f"⚠️ <b>NMEA 2000 SIGNAL LOST!</b>\n\n"
+                f"📡 No data received from <code>{self.can_interface}</code> for <b>{elapsed_s:.0f}s</b>.\n"
+                f"💨 Wind & 🌊 Depth readings are temporarily paused.\n\n"
+                f"🛡️ <i>Anchor Geofence Watch remains ACTIVE using D-Bus GPS.</i>"
+            )
+            self.tg.send_message(msg, reply_markup=self.build_quick_menu())
+
+    def _notify_n2k_recovered(self):
+        log.info("✅ NMEA 2000 communication restored.")
+        self.n2k_lost_notified = False
+        if self.armed and self.config.get("telegram_bot_token"):
+            msg = (
+                f"✅ <b>NMEA 2000 SIGNAL RESTORED!</b>\n\n"
+                f"📡 Live data resumed on <code>{self.can_interface}</code>.\n"
+                f"💨 Wind & 🌊 Depth sensors back online."
+            )
+            self.tg.send_message(msg, reply_markup=self.build_quick_menu())
 
     def get_scheiber_switch(self, channel=None):
         if not self.bus:
@@ -1412,7 +1464,12 @@ class AnchorWatchService:
         rss_mb = get_memory_rss_mb()
         rss_str = f"{rss_mb:.1f} MB" if rss_mb is not None else "N/A"
 
-        n2k_status = "🟢 Active" if self.can_thread_running else "🔴 Stopped"
+        if self.last_n2k_frame_time > 0:
+            n2k_age = time.monotonic() - self.last_n2k_frame_time
+            n2k_status = f"🟢 Online (last frame {n2k_age:.1f}s ago)" if n2k_age <= 20.0 else f"🔴 Signal Lost ({n2k_age:.0f}s ago)"
+        else:
+            n2k_status = "🟡 Waiting for frames"
+
         dbus_status = "🟢 Connected" if self.bus else "🟡 Disconnected"
         gps_status = f"🟢 Fix ({self.gps_sats} sats)" if self.current_lat else "🟡 Searching"
 
